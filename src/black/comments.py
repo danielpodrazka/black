@@ -7,6 +7,9 @@ from blib2to3.pgen2 import token
 from blib2to3.pytree import Leaf, Node
 from typing import Iterator, Union, List
 
+
+STANDALONE_COMMENT = token.ST_COMMENT
+
 # Define a custom typing for LN, which is a union of Leaf and Node
 LN = Union[Leaf, Node]
 
@@ -54,6 +57,57 @@ class ProtoComment:
     consumed: int  # how many characters of the original leaf's prefix did we consume
 
 
+def is_escaped_newline(
+    line: str, index: int, ignored_lines: int, is_endmarker: bool
+) -> bool:
+    return index == ignored_lines and not is_endmarker
+
+
+def create_proto_comment(
+    comment_type: int, line: str, nlines: int, consumed: int
+) -> ProtoComment:
+    comment = make_comment(line)
+    return ProtoComment(
+        type=comment_type, value=comment, newlines=nlines, consumed=consumed
+    )
+
+
+@lru_cache(maxsize=4096)
+def list_comments(prefix: str, *, is_endmarker: bool) -> List[ProtoComment]:
+    """Return a list of ProtoComment objects parsed from the given prefix."""
+    result: List[ProtoComment] = []
+    if not prefix or "#" not in prefix:
+        return result
+
+    consumed = 0
+    nlines = 0
+    ignored_lines = 0
+    for index, line in enumerate(re.split("\r?\n", prefix)):
+        consumed += len(line) + 1
+        line = line.lstrip()
+        if not line:
+            nlines += 1
+        if not line.startswith("#"):
+            if line.endswith("\\"):
+                ignored_lines += 1
+            continue
+
+        comment_type = (
+            token.COMMENT
+            if is_escaped_newline(line, index, ignored_lines, is_endmarker)
+            else STANDALONE_COMMENT
+        )
+
+        result.append(create_proto_comment(comment_type, line, nlines, consumed))
+        nlines = 0
+    return result
+
+
+def make_comment(line: str) -> str:
+    """Create a comment token value by stripping whitespace and dropping the '#'."""
+    return line.lstrip()[1:].rstrip()
+
+
 def create_leaf(pc: ParsedComment) -> Leaf:
     """Create a Leaf object for the given ParsedComment.
 
@@ -95,20 +149,6 @@ def generate_comments(leaf: LN) -> Iterator[Leaf]:
     parsed_comments = list_comments(leaf.prefix, is_endmarker)
     for pc in parsed_comments:
         yield create_leaf(pc)
-
-
-def list_comments(text: str, is_endmarker: bool) -> List[ParsedComment]:
-    """
-    Extract comments from the given text and represent them as a list of ParsedComment objects.
-
-    Args:
-        text: A string containing the text to extract comments from.
-        is_endmarker: A boolean indicating if the token is an endmarker.
-
-    Returns:
-        List[ParsedComment]: A list of ParsedComment objects representing the extracted comments.
-    """
-    # Add the implementation for the list_comments function here.
 
 
 @lru_cache(maxsize=4096)
