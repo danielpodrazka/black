@@ -32,6 +32,7 @@ from blib2to3.pgen2 import token
 from blib2to3.pytree import Leaf, Node
 from typing import Optional
 from typing import List
+from typing import Callable
 from typing import (
     Any,
     Dict,
@@ -141,6 +142,42 @@ class WriteBack(Enum):
             WriteBack: The appropriate WriteBack value based on the input configuration.
         """
         return determine_writeback_action(check, diff, color)
+
+
+def target_version_string_to_enum(target_version: str) -> TargetVersion:
+    """
+    Convert input target version string to TargetVersion enum.
+
+    Args:
+        target_version: A string representing a target version.
+
+    Returns:
+        A TargetVersion enum based on the input target version string.
+    """
+    return TargetVersion[target_version.upper()]
+
+
+def target_version_option_callback(
+    c: click.Context,
+    p: Union[click.Option, click.Parameter],
+    v: Tuple[str, ...],
+) -> List[TargetVersion]:
+    """
+    Convert input target versions to a list of TargetVersion enums.
+
+    Compute the target versions from a --target-version flag.
+    This is its own function because mypy couldn't infer the type correctly
+    when it was a lambda, causing mypyc trouble.
+
+    Args:
+        c: Click context.
+        p: Click parameter, either option or parameter.
+        v: A tuple of strings representing target versions.
+
+    Returns:
+        A list of TargetVersion enums based on the input target versions.
+    """
+    return [target_version_string_to_enum(val) for val in v]
 
 
 def find_pyproject_toml(src: Tuple[str, ...]) -> Optional[str]:
@@ -266,17 +303,6 @@ def read_pyproject_toml(
 
 # Legacy name, left for integrations.
 FileMode = Mode
-
-
-def target_version_option_callback(
-    c: click.Context, p: Union[click.Option, click.Parameter], v: Tuple[str, ...]
-) -> List[TargetVersion]:
-    """Compute the target versions from a --target-version flag.
-
-    This is its own function because mypy couldn't infer the type correctly
-    when it was a lambda, causing mypyc trouble.
-    """
-    return [TargetVersion[val.upper()] for val in v]
 
 
 def re_compile_maybe_verbose(regex: str) -> Pattern[str]:
