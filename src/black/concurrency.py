@@ -24,6 +24,9 @@ from black.report import Changed, Report
 from typing import Optional
 from typing import Iterable, Any
 from typing import List, Tuple
+from typing import Set, Optional
+from black import WriteBack, Mode
+from black.report import Report
 
 
 def maybe_install_uvloop() -> None:
@@ -41,6 +44,88 @@ def maybe_install_uvloop() -> None:
     uvloop_module = attempt_uvloop_import()
     if uvloop_module is not None:
         install_uvloop(uvloop_module)
+
+
+def create_executor(workers: Optional[int]) -> Executor:
+    """Create an executor based on the number of workers passed."""
+    if workers is None:
+        workers = os.cpu_count() or 1
+    if sys.platform == "win32":
+        workers = min(workers, 60)
+
+    try:
+        return ProcessPoolExecutor(max_workers=workers)
+    except (ImportError, NotImplementedError, OSError):
+        return ThreadPoolExecutor(max_workers=1)
+
+
+def setup_event_loop() -> asyncio.AbstractEventLoop:
+    """Set up the event loop and return it."""
+    maybe_install_uvloop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    return loop
+
+
+def close_event_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Close the event loop and remove it."""
+    try:
+        shutdown(loop)
+    finally:
+        asyncio.set_event_loop(None)
+
+
+def run_event_loop(
+    loop: asyncio.AbstractEventLoop,
+    sources: Set[Path],
+    fast: bool,
+    write_back: WriteBack,
+    mode: Mode,
+    report: Report,
+    executor: Executor,
+) -> None:
+    """Run the event loop using the necessary arguments."""
+    loop.run_until_complete(
+        schedule_formatting(
+            sources=sources,
+            fast=fast,
+            write_back=write_back,
+            mode=mode,
+            report=report,
+            loop=loop,
+            executor=executor,
+        )
+    )
+
+
+async def reformat_many(
+    sources: Set[Path],
+    fast: bool,
+    write_back: WriteBack,
+    mode: Mode,
+    report: Report,
+    workers: Optional[int],
+) -> None:
+    """
+    Reformat multiple files using a ProcessPoolExecutor.
+
+    Args:
+        sources: A set of file paths to be reformatted.
+        fast: If true, skip the normal formatting process for files that have writable caches.
+        write_back: An instance of WriteBack to handle the writing of files.
+        mode: An instance of Mode, which contains formatting settings.
+        report: An instance of Report for recording files that have been changed.
+        workers: The number of workers to be used for formatting. Uses os.cpu_count() if not specified.
+    """
+
+    executor = create_executor(workers)
+    loop = setup_event_loop()
+    try:
+        run_event_loop(loop, sources, fast, write_back, mode, report, executor)
+    finally:
+        close_event_loop(loop)
+        if executor is not None:
+            executor.shutdown()
 
 
 def gather_tasks(loop: asyncio.AbstractEventLoop) -> List[asyncio.Task]:
@@ -149,58 +234,6 @@ def attempt_uvloop_import() -> Optional[Any]:
 def install_uvloop(uvloop_module: Any) -> None:
     """Install uvloop as the event loop policy."""
     uvloop_module.install()
-
-
-# diff-shades depends on being to monkeypatch this function to operate. I know it's
-# not ideal, but this shouldn't cause any issues ... hopefully. ~ichard26
-@mypyc_attr(patchable=True)
-def reformat_many(
-    sources: Set[Path],
-    fast: bool,
-    write_back: WriteBack,
-    mode: Mode,
-    report: Report,
-    workers: Optional[int],
-) -> None:
-    """Reformat multiple files using a ProcessPoolExecutor."""
-    maybe_install_uvloop()
-
-    executor: Executor
-    if workers is None:
-        workers = os.cpu_count() or 1
-    if sys.platform == "win32":
-        # Work around https://bugs.python.org/issue26903
-        workers = min(workers, 60)
-    try:
-        executor = ProcessPoolExecutor(max_workers=workers)
-    except (ImportError, NotImplementedError, OSError):
-        # we arrive here if the underlying system does not support multi-processing
-        # like in AWS Lambda or Termux, in which case we gracefully fallback to
-        # a ThreadPoolExecutor with just a single worker (more workers would not do us
-        # any good due to the Global Interpreter Lock)
-        executor = ThreadPoolExecutor(max_workers=1)
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(
-            schedule_formatting(
-                sources=sources,
-                fast=fast,
-                write_back=write_back,
-                mode=mode,
-                report=report,
-                loop=loop,
-                executor=executor,
-            )
-        )
-    finally:
-        try:
-            shutdown(loop)
-        finally:
-            asyncio.set_event_loop(None)
-        if executor is not None:
-            executor.shutdown()
 
 
 async def schedule_formatting(
