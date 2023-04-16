@@ -51,6 +51,78 @@ class InvalidInput(ValueError):
     """Raised when input source code fails all parse attempts."""
 
 
+def get_errors(
+    src_txt: str, grammars: List[Grammar]
+) -> Tuple[Node, Union[None, InvalidInput]]:
+    errors = {}
+    for grammar in grammars:
+        drv = driver.Driver(grammar)
+        try:
+            result = drv.parse_string(src_txt, True)
+            return result, None
+
+        except ParseError as pe:
+            lineno, column = pe.context[1]
+            lines = src_txt.splitlines()
+            try:
+                faulty_line = lines[lineno - 1]
+            except IndexError:
+                faulty_line = "<line number missing in source>"
+            errors[grammar.version] = InvalidInput(
+                f"Cannot parse: {lineno}:{column}: {faulty_line}"
+            )
+
+        except TokenError as te:
+            lineno, column = te.args[1]
+            errors[grammar.version] = InvalidInput(
+                f"Cannot parse: {lineno}:{column}: {te.args[0]}"
+            )
+    return None, errors
+
+
+def ensure_parsed_src(src_txt: str) -> str:
+    if not src_txt.endswith("\n"):
+        src_txt += "\n"
+    return src_txt
+
+
+def lib2to3_parse(src_txt: str, target_versions: Iterable[TargetVersion] = ()) -> Node:
+    """
+    Given a string with source code, return the lib2to3 Node.
+
+    Args:
+        src_txt (str): The source code string to parse.
+        target_versions (Iterable[TargetVersion]): A set of target Python versions.
+            Defaults to an empty set.
+
+    Returns:
+        Node: The lib2to3 Node representing the parsed source code.
+
+    Raises:
+        InvalidInput: If the source code cannot be parsed.
+    """
+    src_txt = ensure_parsed_src(src_txt)
+    grammars = get_grammars(set(target_versions))
+    result, errors = get_errors(src_txt, grammars)
+
+    if result is None:
+        assert len(errors) >= 1
+        exc = errors[max(errors)]
+
+        if matches_grammar(src_txt, pygram.python_grammar) or matches_grammar(
+            src_txt, pygram.python_grammar_no_print_statement
+        ):
+            original_msg = exc.args[0]
+            msg = f"{original_msg}\n{PY2_HINT}"
+            raise InvalidInput(msg) from None
+
+        raise exc from None
+
+    if isinstance(result, Leaf):
+        result = Node(syms.file_input, [result])
+    return result
+
+
 def get_python37_39_grammar(target_versions: Set[TargetVersion]) -> List[Grammar]:
     """Get the Python 3.7-3.9 grammar."""
     if supports_feature(target_versions, Feature.ASYNC_IDENTIFIERS):
@@ -95,56 +167,6 @@ def get_grammars(target_versions: Set[TargetVersion]) -> List[Grammar]:
     )
 
     return grammars
-
-
-def lib2to3_parse(src_txt: str, target_versions: Iterable[TargetVersion] = ()) -> Node:
-    """Given a string with source, return the lib2to3 Node."""
-    if not src_txt.endswith("\n"):
-        src_txt += "\n"
-
-    grammars = get_grammars(set(target_versions))
-    errors = {}
-    for grammar in grammars:
-        drv = driver.Driver(grammar)
-        try:
-            result = drv.parse_string(src_txt, True)
-            break
-
-        except ParseError as pe:
-            lineno, column = pe.context[1]
-            lines = src_txt.splitlines()
-            try:
-                faulty_line = lines[lineno - 1]
-            except IndexError:
-                faulty_line = "<line number missing in source>"
-            errors[grammar.version] = InvalidInput(
-                f"Cannot parse: {lineno}:{column}: {faulty_line}"
-            )
-
-        except TokenError as te:
-            # In edge cases these are raised; and typically don't have a "faulty_line".
-            lineno, column = te.args[1]
-            errors[grammar.version] = InvalidInput(
-                f"Cannot parse: {lineno}:{column}: {te.args[0]}"
-            )
-
-    else:
-        # Choose the latest version when raising the actual parsing error.
-        assert len(errors) >= 1
-        exc = errors[max(errors)]
-
-        if matches_grammar(src_txt, pygram.python_grammar) or matches_grammar(
-            src_txt, pygram.python_grammar_no_print_statement
-        ):
-            original_msg = exc.args[0]
-            msg = f"{original_msg}\n{PY2_HINT}"
-            raise InvalidInput(msg) from None
-
-        raise exc from None
-
-    if isinstance(result, Leaf):
-        result = Node(syms.file_input, [result])
-    return result
 
 
 def matches_grammar(src_txt: str, grammar: Grammar) -> bool:
