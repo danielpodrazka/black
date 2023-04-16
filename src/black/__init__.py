@@ -11,6 +11,26 @@ from datetime import datetime
 from enum import Enum
 from json.decoder import JSONDecodeError
 from pathlib import Path
+
+import click
+from click.core import ParameterSource
+from mypy_extensions import mypyc_attr
+from pathspec import PathSpec
+from pathspec.patterns.gitwildmatch import GitWildMatchPatternError
+
+from _black_version import version as __version__
+from black.cache import Cache, get_cache_info, read_cache, write_cache
+from black.comments import normalize_fmt_off
+from black.linegen import LN, LineGenerator, transform_line
+from black.lines import EmptyLineTracker, LinesBlock
+from black.output import color_diff, diff, dump_to_file, err, ipynb_diff, out
+from black.parsing import InvalidInput  # noqa F401
+from black.parsing import lib2to3_parse, parse_ast, stringify_ast
+from black.report import Changed, NothingChanged, Report
+from black.trans import iter_fexpr_spans
+from blib2to3.pgen2 import token
+from blib2to3.pytree import Leaf, Node
+from typing import Optional
 from typing import (
     Any,
     Dict,
@@ -26,16 +46,6 @@ from typing import (
     Tuple,
     Union,
 )
-
-import click
-from click.core import ParameterSource
-from mypy_extensions import mypyc_attr
-from pathspec import PathSpec
-from pathspec.patterns.gitwildmatch import GitWildMatchPatternError
-
-from _black_version import version as __version__
-from black.cache import Cache, get_cache_info, read_cache, write_cache
-from black.comments import normalize_fmt_off
 from black.const import (
     DEFAULT_EXCLUDES,
     DEFAULT_INCLUDES,
@@ -61,8 +71,6 @@ from black.handle_ipynb_magics import (
     remove_trailing_semicolon,
     unmask_cell,
 )
-from black.linegen import LN, LineGenerator, transform_line
-from black.lines import EmptyLineTracker, LinesBlock
 from black.mode import (
     FUTURE_FLAG_TO_FEATURE,
     VERSION_TO_FEATURES,
@@ -78,13 +86,6 @@ from black.nodes import (
     is_string_token,
     syms,
 )
-from black.output import color_diff, diff, dump_to_file, err, ipynb_diff, out
-from black.parsing import InvalidInput  # noqa F401
-from black.parsing import lib2to3_parse, parse_ast, stringify_ast
-from black.report import Changed, NothingChanged, Report
-from black.trans import iter_fexpr_spans
-from blib2to3.pgen2 import token
-from blib2to3.pytree import Leaf, Node
 
 COMPILED = Path(__file__).suffix in (".pyd", ".so")
 
@@ -94,7 +95,30 @@ Encoding = str
 NewLine = str
 
 
+def determine_writeback_action(check: bool, diff: bool, color: bool) -> "WriteBack":
+    """Determine the appropriate WriteBack action based on the given configuration.
+
+    Args:
+        check: If set to True, performs a check and reports if the code needs formatting.
+        diff: If set to True, shows the diff of the changes that would be made.
+        color: If set to True and diff is also True, shows the diff with colored output.
+
+    Returns:
+        WriteBack: The appropriate WriteBack value based on the input configuration.
+    """
+    if check and not diff:
+        return WriteBack.CHECK
+    if diff and color:
+        return WriteBack.COLOR_DIFF
+    if diff:
+        return WriteBack.DIFF
+
+    return WriteBack.YES
+
+
 class WriteBack(Enum):
+    """Enum representing different write back actions."""
+
     NO = 0
     YES = 1
     DIFF = 2
@@ -103,15 +127,19 @@ class WriteBack(Enum):
 
     @classmethod
     def from_configuration(
-        cls, *, check: bool, diff: bool, color: bool = False
+        cls, *, check: bool, diff: bool, color: Optional[bool] = False
     ) -> "WriteBack":
-        if check and not diff:
-            return cls.CHECK
+        """Determine the appropriate WriteBack value based on the given configuration.
 
-        if diff and color:
-            return cls.COLOR_DIFF
+        Args:
+            check: If set to True, performs a check and reports if the code needs formatting.
+            diff: If set to True, shows the diff of the changes that would be made.
+            color: If set to True and diff is also True, shows the diff with colored output.
 
-        return cls.DIFF if diff else cls.YES
+        Returns:
+            WriteBack: The appropriate WriteBack value based on the input configuration.
+        """
+        return determine_writeback_action(check, diff, color)
 
 
 # Legacy name, left for integrations.
