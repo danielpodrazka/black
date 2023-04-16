@@ -6,11 +6,6 @@ import platform
 import sys
 from typing import Any, Iterable, Iterator, List, Set, Tuple, Type, Union
 
-if sys.version_info < (3, 8):
-    from typing_extensions import Final
-else:
-    from typing import Final
-
 from black.mode import VERSION_TO_FEATURES, Feature, TargetVersion, supports_feature
 from black.nodes import syms
 from blib2to3 import pygram
@@ -19,6 +14,14 @@ from blib2to3.pgen2.grammar import Grammar
 from blib2to3.pgen2.parse import ParseError
 from blib2to3.pgen2.tokenize import TokenError
 from blib2to3.pytree import Leaf, Node
+from typing import Set, List
+
+from black.mode import TargetVersion, Feature, supports_feature
+
+if sys.version_info < (3, 8):
+    from typing_extensions import Final
+else:
+    from typing import Final
 
 ast3: Any
 
@@ -48,36 +51,49 @@ class InvalidInput(ValueError):
     """Raised when input source code fails all parse attempts."""
 
 
+def get_python37_39_grammar(target_versions: Set[TargetVersion]) -> List[Grammar]:
+    """Get the Python 3.7-3.9 grammar."""
+    if supports_feature(target_versions, Feature.ASYNC_IDENTIFIERS):
+        return []
+    return [pygram.python_grammar_no_print_statement_no_exec_statement_async_keywords]
+
+
+def get_python30_36_grammar(target_versions: Set[TargetVersion]) -> List[Grammar]:
+    """Get the Python 3.0-3.6 grammar."""
+    if supports_feature(target_versions, Feature.ASYNC_KEYWORDS):
+        return []
+    return [pygram.python_grammar_no_print_statement_no_exec_statement]
+
+
+def get_python310_grammar(target_versions: Set[TargetVersion]) -> List[Grammar]:
+    """Get the Python 3.10+ grammar."""
+    if not any(
+        Feature.PATTERN_MATCHING in VERSION_TO_FEATURES[v] for v in target_versions
+    ):
+        return []
+    return [pygram.python_grammar_soft_keywords]
+
+
 def get_grammars(target_versions: Set[TargetVersion]) -> List[Grammar]:
+    """
+    Get a list of suitable grammars based on the given target versions.
+
+    Args:
+        target_versions (Set[TargetVersion]): A set of target Python versions.
+
+    Returns:
+        List[Grammar]: A list of suitable grammars.
+
+    If no target_versions are passed, all possible grammars will be returned.
+    """
     if not target_versions:
-        # No target_version specified, so try all grammars.
-        return [
-            # Python 3.7-3.9
-            pygram.python_grammar_no_print_statement_no_exec_statement_async_keywords,
-            # Python 3.0-3.6
-            pygram.python_grammar_no_print_statement_no_exec_statement,
-            # Python 3.10+
-            pygram.python_grammar_soft_keywords,
-        ]
+        return get_grammars({*TargetVersion})
+    grammars = (
+        get_python37_39_grammar(target_versions)
+        + get_python30_36_grammar(target_versions)
+        + get_python310_grammar(target_versions)
+    )
 
-    grammars = []
-    # If we have to parse both, try to parse async as a keyword first
-    if not supports_feature(
-        target_versions, Feature.ASYNC_IDENTIFIERS
-    ) and not supports_feature(target_versions, Feature.PATTERN_MATCHING):
-        # Python 3.7-3.9
-        grammars.append(
-            pygram.python_grammar_no_print_statement_no_exec_statement_async_keywords
-        )
-    if not supports_feature(target_versions, Feature.ASYNC_KEYWORDS):
-        # Python 3.0-3.6
-        grammars.append(pygram.python_grammar_no_print_statement_no_exec_statement)
-    if any(Feature.PATTERN_MATCHING in VERSION_TO_FEATURES[v] for v in target_versions):
-        # Python 3.10+
-        grammars.append(pygram.python_grammar_soft_keywords)
-
-    # At least one of the above branches must have been taken, because every Python
-    # version has exactly one of the two 'ASYNC_*' flags
     return grammars
 
 
