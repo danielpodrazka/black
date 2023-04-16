@@ -80,6 +80,39 @@ def get_errors(
     return None, errors
 
 
+def parse_source_with_driver(src_txt: str, drv: driver.Driver) -> bool:
+    """
+    Parse the source code with the given driver.
+
+    Args:
+        src_txt: The source code to be parsed as a string.
+        drv: The blib2to3.pgen2.driver.Driver instance to use for parsing.
+
+    Returns:
+        True if parsing was successful, False if there was a parsing error.
+    """
+    try:
+        drv.parse_string(src_txt, True)
+        return True
+    except (ParseError, TokenError, IndentationError):
+        return False
+
+
+def matches_grammar(src_txt: str, grammar: Grammar) -> bool:
+    """
+    Check if the given source text matches the provided grammar.
+
+    Args:
+        src_txt: The source code to be checked as a string.
+        grammar: The Grammar instance to be checked against.
+
+    Returns:
+        True if source code matches the grammar, False otherwise.
+    """
+    drv = driver.Driver(grammar)
+    return parse_source_with_driver(src_txt, drv)
+
+
 def ensure_parsed_src(src_txt: str) -> str:
     if not src_txt.endswith("\n"):
         src_txt += "\n"
@@ -167,16 +200,6 @@ def get_grammars(target_versions: Set[TargetVersion]) -> List[Grammar]:
     )
 
     return grammars
-
-
-def matches_grammar(src_txt: str, grammar: Grammar) -> bool:
-    drv = driver.Driver(grammar)
-    try:
-        drv.parse_string(src_txt, True)
-    except (ParseError, TokenError, IndentationError):
-        return False
-    else:
-        return True
 
 
 def lib2to3_unparse(node: Node) -> str:
