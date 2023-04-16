@@ -38,6 +38,8 @@ from re import compile as re_compile
 from re import VERBOSE
 from typing import Optional, Pattern
 from typing import Set, Tuple, Pattern
+from typing import Sized
+from click import Context
 from typing import (
     Any,
     Dict,
@@ -121,6 +123,42 @@ def determine_writeback_action(check: bool, diff: bool, color: bool) -> "WriteBa
         return WriteBack.DIFF
 
     return WriteBack.YES
+
+
+def should_print_message(quiet: bool, verbose: bool) -> bool:
+    """Determine if a message should be printed based on quiet and verbose flags.
+
+    Args:
+        quiet (bool): Indicates whether the process is running in quiet mode or not.
+        verbose (bool): Indicates whether the process is running in verbose mode or not.
+
+    Returns:
+        bool: True if the message should be printed, False otherwise.
+    """
+    return verbose or not quiet
+
+
+def exit_if_src_empty(
+    src: Sized, msg: str, quiet: bool, verbose: bool, ctx: Context
+) -> None:
+    """Exit if there is no `src` provided for formatting.
+
+    This function checks if the given `src` (which is an instance of a `Sized` type)
+    is empty or not. If it's empty, it will print the provided `msg` if the process
+    is not running in quiet mode or running in verbose mode, and then exits the
+    application with a 0 return code.
+
+    Args:
+        src (Sized): The source code or data input to check.
+        msg (str): The message to print if the `src` is empty.
+        quiet (bool): Indicates whether the process is running in quiet mode or not.
+        verbose (bool): Indicates whether the process is running in verbose mode or not.
+        ctx (click.Context): A Click context object.
+    """
+    if not src:
+        if should_print_message(quiet, verbose):
+            out(msg)
+        ctx.exit(0)
 
 
 def is_file_path_excluded(path: Path, exclude: Optional[Pattern[str]]) -> bool:
@@ -890,18 +928,6 @@ def main(  # noqa: C901
         if code is None:
             click.echo(str(report), err=True)
     ctx.exit(report.return_code)
-
-
-def path_empty(
-    src: Sized, msg: str, quiet: bool, verbose: bool, ctx: click.Context
-) -> None:
-    """
-    Exit if there is no `src` provided for formatting
-    """
-    if not src:
-        if verbose or not quiet:
-            out(msg)
-        ctx.exit(0)
 
 
 def reformat_code(
