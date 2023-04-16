@@ -43,6 +43,8 @@ from click import Context
 from typing import Optional, Tuple
 from black import Mode, Report, WriteBack
 from typing import Any, Dict, Union
+from contextlib import ContextDecorator
+from typing import Any, Callable, Union
 
 PathLike = Union[str, Path]
 
@@ -109,6 +111,92 @@ COMPILED = Path(__file__).suffix in (".pyd", ".so")
 
 # types
 FileContent = str
+
+
+class StreamWrapper(ContextDecorator):
+    def __init__(self, stream: io.TextIOWrapper) -> None:
+        self.stream = stream
+
+    def __enter__(self) -> io.TextIOWrapper:
+        return wrap_stream_for_windows(self.stream)
+
+    def __exit__(self, *exc: Any) -> None:
+        self.stream.detach()
+
+
+def read_file(src: Path, mode: Mode) -> Tuple[bytes, str, str, str]:
+    header = b""
+    with open(src, "rb") as buf:
+        if mode.skip_source_first_line:
+            header = buf.readline()
+        contents, encoding, newline = decode_bytes(buf.read())
+    return header, contents, encoding, newline
+
+
+def write_file(
+    src: Path,
+    contents: str,
+    encoding: str,
+    newline: str,
+) -> None:
+    with open(src, "w", encoding=encoding, newline=newline) as f:
+        f.write(contents)
+
+
+def print_diff_contents(
+    diff_contents: str,
+    encoding: str,
+    newline: str,
+    lock: Optional[Any] = None,
+) -> None:
+    with lock or nullcontext():
+        with StreamWrapper(
+            io.TextIOWrapper(sys.stdout.buffer, encoding, newline, write_through=True)
+        ) as f:
+            f.write(diff_contents)
+
+
+def format_file_in_place(
+    src: Path,
+    fast: bool,
+    mode: Mode,
+    write_back: WriteBack = WriteBack.NO,
+    lock: Any = None,  # multiprocessing.Manager().Lock() is some crazy proxy
+) -> bool:
+    if src.suffix == ".pyi":
+        mode = replace(mode, is_pyi=True)
+    elif src.suffix == ".ipynb":
+        mode = replace(mode, is_ipynb=True)
+
+    header, src_contents, encoding, newline = read_file(src, mode)
+
+    try:
+        dst_contents = format_file_contents(src_contents, fast=fast, mode=mode)
+    except NothingChanged:
+        return False
+    except JSONDecodeError:
+        raise ValueError(
+            f"File '{src}' cannot be parsed as a valid Jupyter notebook."
+        ) from None
+
+    src_contents = header.decode(encoding) + src_contents
+    dst_contents = header.decode(encoding) + dst_contents
+
+    if write_back == WriteBack.YES:
+        write_file(src, dst_contents, encoding, newline)
+    elif write_back in (WriteBack.DIFF, WriteBack.COLOR_DIFF):
+        now = datetime.utcnow()
+        src_name = f"{src}\t{then} +0000"
+        dst_name = f"{src}\t{now} +0000"
+        diff_method = ipynb_diff if mode.is_ipynb else diff
+        diff_contents = diff_method(src_contents, dst_contents, src_name, dst_name)
+
+        if write_back == WriteBack.COLOR_DIFF:
+            diff_contents = color_diff(diff_contents)
+
+        print_diff_contents(diff_contents, encoding, newline, lock)
+
+    return True
 Encoding = str
 
 
@@ -1132,70 +1220,6 @@ def main(  # noqa: C901
         if code is None:
             click.echo(str(report), err=True)
     ctx.exit(report.return_code)
-
-
-def format_file_in_place(
-    src: Path,
-    fast: bool,
-    mode: Mode,
-    write_back: WriteBack = WriteBack.NO,
-    lock: Any = None,  # multiprocessing.Manager().Lock() is some crazy proxy
-) -> bool:
-    """Format file under `src` path. Return True if changed.
-
-    If `write_back` is DIFF, write a diff to stdout. If it is YES, write reformatted
-    code to the file.
-    `mode` and `fast` options are passed to :func:`format_file_contents`.
-    """
-    if src.suffix == ".pyi":
-        mode = replace(mode, is_pyi=True)
-    elif src.suffix == ".ipynb":
-        mode = replace(mode, is_ipynb=True)
-
-    then = datetime.utcfromtimestamp(src.stat().st_mtime)
-    header = b""
-    with open(src, "rb") as buf:
-        if mode.skip_source_first_line:
-            header = buf.readline()
-        src_contents, encoding, newline = decode_bytes(buf.read())
-    try:
-        dst_contents = format_file_contents(src_contents, fast=fast, mode=mode)
-    except NothingChanged:
-        return False
-    except JSONDecodeError:
-        raise ValueError(
-            f"File '{src}' cannot be parsed as valid Jupyter notebook."
-        ) from None
-    src_contents = header.decode(encoding) + src_contents
-    dst_contents = header.decode(encoding) + dst_contents
-
-    if write_back == WriteBack.YES:
-        with open(src, "w", encoding=encoding, newline=newline) as f:
-            f.write(dst_contents)
-    elif write_back in (WriteBack.DIFF, WriteBack.COLOR_DIFF):
-        now = datetime.utcnow()
-        src_name = f"{src}\t{then} +0000"
-        dst_name = f"{src}\t{now} +0000"
-        if mode.is_ipynb:
-            diff_contents = ipynb_diff(src_contents, dst_contents, src_name, dst_name)
-        else:
-            diff_contents = diff(src_contents, dst_contents, src_name, dst_name)
-
-        if write_back == WriteBack.COLOR_DIFF:
-            diff_contents = color_diff(diff_contents)
-
-        with lock or nullcontext():
-            f = io.TextIOWrapper(
-                sys.stdout.buffer,
-                encoding=encoding,
-                newline=newline,
-                write_through=True,
-            )
-            f = wrap_stream_for_windows(f)
-            f.write(diff_contents)
-            f.detach()
-
-    return True
 
 
 def format_stdin_to_stdout(
