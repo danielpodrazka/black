@@ -21,6 +21,7 @@ from typing import List
 from typing import Any, Iterable, Iterator, List, Tuple, Type, Union
 from ast import AST
 from typing import Iterator, Tuple
+from typing import Union
 
 _IS_PYPY = platform.python_implementation() == "PyPy"
 
@@ -117,6 +118,38 @@ def matches_grammar(src_txt: str, grammar: Grammar) -> bool:
     """
     drv = driver.Driver(grammar)
     return parse_source_with_driver(src_txt, drv)
+
+
+def convert_node(node: Union[AST, ast3.AST]) -> ast.Constant:
+    """
+    Convert deprecated node to new ast.Constant.
+
+    Args:
+        node: Deprecated node instance.
+
+    Returns:
+        An instance of ast.Constant with the correct value.
+    """
+    if isinstance(node, (ast.Str, ast3.Str, ast.Bytes, ast3.Bytes)):
+        return ast.Constant(value=node.s)
+    if isinstance(node, (ast.Num, ast3.Num)):
+        return ast.Constant(value=node.n)
+    if isinstance(node, (ast.NameConstant, ast3.NameConstant)):
+        return ast.Constant(value=node.value)
+
+
+def fixup_ast_constants(node: Union[AST, ast3.AST]) -> Union[AST, ast3.AST]:
+    """
+    Replace deprecated nodes with the `ast.Constant` node for given `node`.
+
+    Args:
+        node: An instance of `ast.AST` or `ast3.AST`.
+
+    Returns:
+        A new instance of `ast.Constant` if `node` represents a deprecated node,
+        otherwise the original `node` is returned.
+    """
+    return convert_node(node) or node
 
 
 def parse_single_version(
@@ -522,17 +555,3 @@ def lib2to3_unparse(node: Node) -> str:
 
 
 ast3_AST: Final[Type[ast3.AST]] = ast3.AST
-
-
-def fixup_ast_constants(node: Union[ast.AST, ast3.AST]) -> Union[ast.AST, ast3.AST]:
-    """Map ast nodes deprecated in 3.8 to Constant."""
-    if isinstance(node, (ast.Str, ast3.Str, ast.Bytes, ast3.Bytes)):
-        return ast.Constant(value=node.s)
-
-    if isinstance(node, (ast.Num, ast3.Num)):
-        return ast.Constant(value=node.n)
-
-    if isinstance(node, (ast.NameConstant, ast3.NameConstant)):
-        return ast.Constant(value=node.value)
-
-    return node
