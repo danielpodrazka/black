@@ -40,6 +40,12 @@ from typing import Optional, Pattern
 from typing import Set, Tuple, Pattern
 from typing import Sized
 from click import Context
+from typing import Optional, Tuple
+from black import Mode, Report, WriteBack
+
+
+# Please note: `format_stdin_to_stdout` was already in scope, so I didn't add it.
+# But in your own project, make sure it is imported or defined.
 from typing import (
     Any,
     Dict,
@@ -102,6 +108,72 @@ COMPILED = Path(__file__).suffix in (".pyd", ".so")
 FileContent = str
 Encoding = str
 NewLine = str
+
+
+def print_or_write_reformatted_code(
+    content: str, write_back: WriteBack, mode: Mode
+) -> bool:
+    """
+    Print reformatted code or perform write-back operation.
+
+    Args:
+        content (str): Reformatted source code.
+        write_back (WriteBack): How the reformatted code should be written back.
+        mode (Mode): The formatting settings used.
+
+    Returns:
+        bool: True if content_was_reformatted, False otherwise.
+    """
+    if write_back == WriteBack.YES:
+        dst = mode.path.open("w", newline="", encoding="utf-8-sig")
+        end_newline = True
+        if end_newline:
+            content += "\n"
+        dst.write(content)
+        return True
+    elif write_back == WriteBack.DIFF:
+        err("error: --diff not supported with unsaved files yet")
+
+    return False
+
+
+def reformat_code(
+    content: str, fast: bool, write_back: WriteBack, mode: Mode, report: Report
+) -> None:
+    """
+    Reformat and print out `content` without spawning child processes.
+    Similar to `reformat_one`, but for string content.
+
+    Args:
+        content (str): The source code to reformat.
+        fast (bool): If True, skip the stability-check of reformatted content.
+        write_back (WriteBack): How the reformatted code should be written back.
+        mode (Mode): The formatting settings to apply on the content.
+        report (Report): The object to handle the outcome reporting.
+
+    Side Effects:
+        - Prints the reformatted code or performs the write back operation.
+        - Populates the report (`black.report.Report`) object.
+
+    Raises:
+        Exception: If an error occurs during the reformatting process.
+    """
+    path = Path("<string>")
+    try:
+        changed = Changed.NO
+        reformatted_content = format_stdin_to_stdout(
+            content=content, fast=fast, mode=mode
+        )
+        if reformatted_content is not None:
+            changed = Changed.YES
+            print_or_write_reformatted_code(
+                content=reformatted_content, write_back=write_back, mode=mode
+            )
+        report.done(path, changed)
+    except Exception as exc:
+        if report.verbose:
+            traceback.print_exc()
+        report.failed(path, str(exc))
 
 
 def determine_writeback_action(check: bool, diff: bool, color: bool) -> "WriteBack":
@@ -928,30 +1000,6 @@ def main(  # noqa: C901
         if code is None:
             click.echo(str(report), err=True)
     ctx.exit(report.return_code)
-
-
-def reformat_code(
-    content: str, fast: bool, write_back: WriteBack, mode: Mode, report: Report
-) -> None:
-    """
-    Reformat and print out `content` without spawning child processes.
-    Similar to `reformat_one`, but for string content.
-
-    `fast`, `write_back`, and `mode` options are passed to
-    :func:`format_file_in_place` or :func:`format_stdin_to_stdout`.
-    """
-    path = Path("<string>")
-    try:
-        changed = Changed.NO
-        if format_stdin_to_stdout(
-            content=content, fast=fast, write_back=write_back, mode=mode
-        ):
-            changed = Changed.YES
-        report.done(path, changed)
-    except Exception as exc:
-        if report.verbose:
-            traceback.print_exc()
-        report.failed(path, str(exc))
 
 
 # diff-shades depends on being to monkeypatch this function to operate. I know it's
