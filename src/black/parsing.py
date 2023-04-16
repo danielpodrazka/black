@@ -18,6 +18,11 @@ from typing import Set, List
 
 from black.mode import TargetVersion, Feature, supports_feature
 from typing import List
+from typing import Any, Iterable, Iterator, List, Tuple, Type, Union
+from ast import AST
+from typing import Iterator, Tuple
+
+_IS_PYPY = platform.python_implementation() == "PyPy"
 
 if sys.version_info < (3, 8):
     from typing_extensions import Final
@@ -173,6 +178,104 @@ def parse_ast(src: str) -> Union[ast.AST, ast.mod]:
 def _generate_python_versions() -> List[Tuple[int, int]]:
     """Generates a list of Python versions to attempt parsing with."""
     return [(3, minor) for minor in range(3, sys.version_info[1] + 1)]
+
+
+def stringify_fields(node: Union[AST, ast3.AST], depth: int) -> Iterator[str]:
+    """
+    Extract field values and recursively process nested nodes.
+
+    Args:
+        node (Union[AST, ast3.AST]): The AST node with fields to process.
+        depth (int): The current depth in the tree (used for indentation).
+
+    Yields:
+        Iterator[str]: A series of strings representing the field values.
+    """
+    for field in sorted(node._fields):
+        yield f"{'  ' * (depth+1)}{field}="
+        value = getattr(node, field, None)
+        if value is None:
+            continue
+
+        if isinstance(value, list):
+            for item in value:
+                if should_skip_nested_tuple(node, field, item):
+                    for elt in item.elts:
+                        yield from stringify_ast(elt, depth + 2)
+                elif isinstance(item, (AST, ast3.AST)):
+                    yield from stringify_ast(item, depth + 2)
+        elif isinstance(value, (AST, ast3.AST)):
+            yield from stringify_ast(value, depth + 2)
+        else:
+            yield make_normalized_repr(node, field, value, depth)
+
+
+def make_normalized_repr(
+    node: Union[AST, ast3.AST], field: str, value: object, depth: int
+) -> str:
+    """
+    Create a normalized representation of a value.
+
+    Args:
+        node (Union[AST, ast3.AST]): The AST node containing the value.
+        field (str): The field name where the value is stored.
+        value (object): The value to normalize.
+        depth (int): The current depth in the tree (used for indentation).
+
+    Returns:
+        str: A normalized string representation of the value.
+    """
+    if isinstance(node, ast.Constant) and field == "value" and isinstance(value, str):
+        normalized = _normalize("\n", value)
+    else:
+        normalized = value
+    return f"{'  ' * (depth+2)}{normalized!r},  # {value.__class__.__name__}"
+
+
+def should_skip_nested_tuple(node: Union[AST, ast3.AST], field: str, item: Any) -> bool:
+    """
+    Determine if a nested tuple within a del statement should be skipped.
+
+    Args:
+        node (Union[AST, ast3.AST]): The AST node being processed.
+        field (str): The field name to check.
+        item (Any): The item that should be checked for a nested tuple.
+
+    Returns:
+        bool: True if the nested tuple should be skipped, False otherwise.
+    """
+    return (
+        field == "targets"
+        and isinstance(node, (ast.Delete, ast3.Delete))
+        and isinstance(item, (ast.Tuple, ast3.Tuple))
+    )
+
+
+def stringify_ast(node: Union[AST, ast3.AST], depth: int = 0) -> Iterator[str]:
+    """
+    Simple visitor generating strings to compare ASTs by content.
+
+    This function yields strings representing the AST node. It takes into account
+    node type, field values, and handles lists and nested nodes recursively.
+
+    Args:
+        node (Union[AST, ast3.AST]): The AST node to stringify.
+        depth (int, optional): The current depth in the tree (used for indentation). Defaults to 0.
+
+    Yields:
+        Iterator[str]: A series of strings representing the AST node.
+    """
+
+    node = fixup_ast_constants(node)
+
+    if isinstance(node, (ast3.TypeIgnore, ast.TypeIgnore)):  # handle edge case
+        return
+
+    yield f"{'  ' * depth}{node.__class__.__name__}("
+
+    yield from stringify_fields(node, depth)
+
+    yield f"{'  ' * depth})  # /{node.__class__.__name__}"
 
 
 def _strip_lines(value: str) -> List[str]:
@@ -419,73 +522,6 @@ def lib2to3_unparse(node: Node) -> str:
 
 
 ast3_AST: Final[Type[ast3.AST]] = ast3.AST
-
-
-def stringify_ast(node: Union[ast.AST, ast3.AST], depth: int = 0) -> Iterator[str]:
-    """Simple visitor generating strings to compare ASTs by content."""
-
-    node = fixup_ast_constants(node)
-
-    yield f"{'  ' * depth}{node.__class__.__name__}("
-
-    type_ignore_classes: Tuple[Type[Any], ...]
-    for field in sorted(node._fields):  # noqa: F402
-        # TypeIgnore will not be present using pypy < 3.8, so need for this
-        if not (_IS_PYPY and sys.version_info < (3, 8)):
-            # TypeIgnore has only one field 'lineno' which breaks this comparison
-            type_ignore_classes = (ast3.TypeIgnore,)
-            if sys.version_info >= (3, 8):
-                type_ignore_classes += (ast.TypeIgnore,)
-            if isinstance(node, type_ignore_classes):
-                break
-
-        try:
-            value: object = getattr(node, field)
-        except AttributeError:
-            continue
-
-        yield f"{'  ' * (depth+1)}{field}="
-
-        if isinstance(value, list):
-            for item in value:
-                # Ignore nested tuples within del statements, because we may insert
-                # parentheses and they change the AST.
-                if (
-                    field == "targets"
-                    and isinstance(node, (ast.Delete, ast3.Delete))
-                    and isinstance(item, (ast.Tuple, ast3.Tuple))
-                ):
-                    for elt in item.elts:
-                        yield from stringify_ast(elt, depth + 2)
-
-                elif isinstance(item, (ast.AST, ast3.AST)):
-                    yield from stringify_ast(item, depth + 2)
-
-        # Note that we are referencing the typed-ast ASTs via global variables and not
-        # direct module attribute accesses because that breaks mypyc. It's probably
-        # something to do with the ast3 variables being marked as Any leading
-        # mypy to think this branch is always taken, leaving the rest of the code
-        # unanalyzed. Tighting up the types for the typed-ast AST types avoids the
-        # mypyc crash.
-        elif isinstance(value, (ast.AST, ast3_AST)):
-            yield from stringify_ast(value, depth + 2)
-
-        else:
-            normalized: object
-            # Constant strings may be indented across newlines, if they are
-            # docstrings; fold spaces after newlines when comparing. Similarly,
-            # trailing and leading space may be removed.
-            if (
-                isinstance(node, ast.Constant)
-                and field == "value"
-                and isinstance(value, str)
-            ):
-                normalized = _normalize("\n", value)
-            else:
-                normalized = value
-            yield f"{'  ' * (depth+2)}{normalized!r},  # {value.__class__.__name__}"
-
-    yield f"{'  ' * depth})  # /{node.__class__.__name__}"
 
 
 def fixup_ast_constants(node: Union[ast.AST, ast3.AST]) -> Union[ast.AST, ast3.AST]:
