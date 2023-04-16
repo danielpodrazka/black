@@ -41,6 +41,78 @@ FMT_SKIP: Final = {"# fmt: skip", "# fmt:skip"}
 FMT_PASS: Final = {*FMT_OFF, *FMT_SKIP}
 FMT_ON: Final = {"# fmt: on", "# fmt:on", "# yapf: enable"}
 
+
+def normalize_fmt_off(node: Node) -> None:
+    """
+    Convert content between `# fmt: off`/`# fmt: on` into standalone comments.
+
+    This function modifies the code tree, replacing code nodes between
+    `# fmt: off` and `# fmt: on` with standalone comment nodes. The
+    process repeats until no more `# fmt: off`/`# fmt: on` pairs are found.
+
+    Args:
+        node (Node): The root node of the code tree to be normalized.
+    """
+    while convert_one_fmt_off_pair(node):
+        pass
+
+
+def find_fmt_off_on_pair(node: Node) -> Optional[List[Node]]:
+    """
+    Find a pair of `# fmt: off` and `# fmt: on` in the code tree.
+
+    This helper function searches for a pair of nodes with `# fmt: off`
+    and `# fmt: on` comments in the given code tree.
+
+    Args:
+        node (Node): The root node of the code tree to search.
+
+    Returns:
+        Optional[List[Node]]: A list of nodes between the pair, or None if not found.
+    """
+    pair = (None, None)  # (fmt: off index, fmt: on index)
+    for i, child in enumerate(node.children):
+        if not isinstance(child, Leaf):
+            continue
+
+        if child.type == token.COMMENT and child.value.strip() == "# fmt: off":
+            if pair[0] is None:
+                pair = (i, None)
+            else:
+                # Found another # fmt: off; reset the search
+                pair = (None, None)
+        elif child.type == token.COMMENT and child.value.strip() == "# fmt: on":
+            if pair[0] is not None:
+                pair = (pair[0], i)
+                return node.children[pair[0] + 1 : pair[1]]
+
+    return None
+
+
+def convert_one_fmt_off_pair(node: Node) -> bool:
+    """
+    Convert one pair of `# fmt: off`/`# fmt: on` into standalone comments.
+
+    This helper function modifies the code tree, removing code nodes
+    between `# fmt: off` and `# fmt: on` and reinserting them as
+    standalone comment nodes.
+
+    Args:
+        node (Node): The root node of the code tree to be normalized.
+
+    Returns:
+        bool: Returns True if a pair of `# fmt: off`/`# fmt: on` was found
+              and converted, False otherwise.
+    """
+    fmt_off_on_pair = find_fmt_off_on_pair(node)
+    if fmt_off_on_pair is None:
+        return False
+
+    for child in fmt_off_on_pair:
+        child.type = token.COMMENT
+        child.value = f"# {child.value}"
+    return True
+
 COMMENT_EXCEPTIONS = " !:#'"
 
 
@@ -260,13 +332,6 @@ def make_comment(content: str) -> str:
     if content and content[0] not in COMMENT_EXCEPTIONS:
         content = " " + content
     return "#" + content
-
-
-def normalize_fmt_off(node: Node) -> None:
-    """Convert content between `# fmt: off`/`# fmt: on` into standalone comments."""
-    try_again = True
-    while try_again:
-        try_again = convert_one_fmt_off_pair(node)
 
 
 def convert_one_fmt_off_pair(node: Node) -> bool:
