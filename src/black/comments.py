@@ -10,6 +10,8 @@ from typing import Optional
 from typing import Tuple
 from typing import Iterator, Union
 
+LN = Union[Leaf, Node]  # LN is an alias for Leaf or Node types
+
 
 LN = Union[Leaf, Node]
 
@@ -45,6 +47,87 @@ FMT_OFF: Final = {"# fmt: off", "# fmt:off", "# yapf: disable"}
 FMT_SKIP: Final = {"# fmt: skip", "# fmt:skip"}
 FMT_PASS: Final = {*FMT_OFF, *FMT_SKIP}
 FMT_ON: Final = {"# fmt: on", "# fmt:on", "# yapf: enable"}
+
+
+def get_leaf_prefix(leaf: Leaf, comment: OntoComment) -> str:
+    """Extract the properly formatted prefix of a leaf."""
+    comments = list_comments(leaf.prefix, is_endmarker=False)
+    if not comments or comment.value != comments[0].value:
+        return ""
+
+    return leaf.prefix
+
+
+def extract_prev_siblings(leaf: Leaf) -> List[LN]:
+    """Collect all previous siblings of a leaf."""
+    siblings = []
+    prev_sibling = leaf.prev_sibling
+    while "\n" not in prev_sibling.prefix and prev_sibling.prev_sibling is not None:
+        prev_sibling = prev_sibling.prev_sibling
+        siblings.insert(0, prev_sibling)
+
+    return siblings
+
+
+def collect_parent_prev_siblings(parent: Node) -> List[LN]:
+    """Collect all previous siblings of a node's parent."""
+    ignored_nodes = []
+    parent_sibling = parent.prev_sibling
+    while parent_sibling is not None and parent_sibling.type != syms.suite:
+        ignored_nodes.insert(0, parent_sibling)
+        parent_sibling = parent_sibling.prev_sibling
+
+    return ignored_nodes
+
+
+def special_case_async(parent: Node, ignored_nodes: List[LN]) -> List[LN]:
+    """Handle special cases for `async_stmt`."""
+    grandparent = parent.parent
+    if (
+        grandparent is not None
+        and grandparent.prev_sibling is not None
+        and grandparent.prev_sibling.type == token.ASYNC
+    ):
+        ignored_nodes.insert(0, grandparent.prev_sibling)
+
+    return ignored_nodes
+
+
+def _generate_ignored_nodes_from_fmt_skip(
+    leaf: Leaf, comment: OntoComment
+) -> Iterator[LN]:
+    """
+    Generate all leaves that should be ignored by the `# fmt: skip` from `leaf`.
+
+    This function traverses the siblings of the provided `leaf` and searches
+    for nodes that should be skipped due to the presence of a `# fmt: skip`
+    comment.
+
+    Args:
+        leaf (Leaf): The starting leaf node.
+        comment (OntoComment): The comment object associated with the `# fmt: skip`.
+
+    Returns:
+        Iterator[LN]: An iterator of Leaf and Node objects to be ignored.
+    """
+    leaf_prefix = get_leaf_prefix(leaf, comment)
+    if not leaf_prefix:
+        return
+
+    prev_sibling = leaf.prev_sibling
+    parent = leaf.parent
+
+    if prev_sibling is not None:
+        leaf.prefix = ""
+        siblings = extract_prev_siblings(leaf)
+        yield from siblings
+    elif (
+        parent is not None and parent.type == syms.suite and leaf.type == token.NEWLINE
+    ):
+        leaf.prefix = ""
+        ignored_nodes: List[LN] = collect_parent_prev_siblings(parent)
+        ignored_nodes = special_case_async(parent, ignored_nodes)
+        yield from iter(ignored_nodes)
 
 
 def normalize_fmt_off(node: Node) -> None:
@@ -535,48 +618,6 @@ def convert_one_fmt_off_pair(node: Node) -> bool:
             return True
 
     return False
-
-
-def _generate_ignored_nodes_from_fmt_skip(
-    leaf: Leaf, comment: ProtoComment
-) -> Iterator[LN]:
-    """Generate all leaves that should be ignored by the `# fmt: skip` from `leaf`."""
-    prev_sibling = leaf.prev_sibling
-    parent = leaf.parent
-    # Need to properly format the leaf prefix to compare it to comment.value,
-    # which is also formatted
-    comments = list_comments(leaf.prefix, is_endmarker=False)
-    if not comments or comment.value != comments[0].value:
-        return
-    if prev_sibling is not None:
-        leaf.prefix = ""
-        siblings = [prev_sibling]
-        while "\n" not in prev_sibling.prefix and prev_sibling.prev_sibling is not None:
-            prev_sibling = prev_sibling.prev_sibling
-            siblings.insert(0, prev_sibling)
-        yield from siblings
-    elif (
-        parent is not None and parent.type == syms.suite and leaf.type == token.NEWLINE
-    ):
-        # The `# fmt: skip` is on the colon line of the if/while/def/class/...
-        # statements. The ignored nodes should be previous siblings of the
-        # parent suite node.
-        leaf.prefix = ""
-        ignored_nodes: List[LN] = []
-        parent_sibling = parent.prev_sibling
-        while parent_sibling is not None and parent_sibling.type != syms.suite:
-            ignored_nodes.insert(0, parent_sibling)
-            parent_sibling = parent_sibling.prev_sibling
-        # Special case for `async_stmt` where the ASYNC token is on the
-        # grandparent node.
-        grandparent = parent.parent
-        if (
-            grandparent is not None
-            and grandparent.prev_sibling is not None
-            and grandparent.prev_sibling.type == token.ASYNC
-        ):
-            ignored_nodes.insert(0, grandparent.prev_sibling)
-        yield from iter(ignored_nodes)
 
 
 def is_fmt_on(container: LN) -> bool:
