@@ -7,6 +7,7 @@ from blib2to3.pgen2 import token
 from blib2to3.pytree import Leaf, Node
 from typing import Iterator, Union, List
 from typing import Optional
+from typing import Tuple
 
 
 COMMENT_EXCEPTIONS = ["!", ":", "#"]
@@ -57,6 +58,94 @@ def normalize_fmt_off(node: Node) -> None:
         pass
 
 
+def find_fmt_off_leaf(node: Node) -> Tuple[Optional[Leaf], int]:
+    """
+    Find the '# fmt: off' leaf in the given node.
+
+    Args:
+        node (Node): The node to search.
+
+    Returns:
+        Tuple[Optional[Leaf], int]: A tuple containing the '# fmt: off' leaf if found and its index.
+    """
+    for index, leaf in enumerate(node.leaves()):
+        if leaf.prefix.strip() == FMT_OFF:
+            return leaf, index
+    return None, -1
+
+
+def find_fmt_on_leaf(node: Node, start_index: int) -> Optional[Leaf]:
+    """
+    Find the '# fmt: on' leaf in the given node.
+
+    Args:
+        node (Node): The node to search.
+        start_index (int): The index to start searching from.
+
+    Returns:
+        Optional[Leaf]: The '# fmt: on' leaf if found; None otherwise.
+    """
+    for leaf in node.leaves()[start_index + 1 :]:
+        if leaf.prefix.strip() in FMT_PASS:
+            return leaf
+    return None
+
+
+def convert_fmt_off_pair_contents(
+    fmt_off_leaf: Optional[Leaf], fmt_on_leaf: Optional[Leaf]
+) -> bool:
+    """
+    Convert content of a single `# fmt: off`/`# fmt: on` into a standalone comment.
+
+    Args:
+        fmt_off_leaf (Optional[Leaf]): The '# fmt: off' leaf.
+        fmt_on_leaf (Optional[Leaf]): The '# fmt: on' leaf.
+
+    Returns:
+        bool: True if the pair was converted; False otherwise.
+    """
+    if fmt_off_leaf and fmt_on_leaf:
+        consumed = 0
+        fmt_comment = Comment(
+            value=FMT_OFF + "\n", type=STANDALONE_COMMENT, newlines=1, consumed=0
+        )
+        for sibling in generate_ignored_nodes(fmt_off_leaf, fmt_comment):
+            if sibling is fmt_on_leaf:
+                break
+            if sibling.startswith("#"):
+                fmt_comment.value += sibling.value.splitlines()[0] + "\n"
+                consumed += 1
+                fmt_comment.newlines -= 1
+                sibling.remove()
+
+        fmt_comment.value = fmt_comment.value.rstrip("\n") + "\n" * (
+            fmt_comment.newlines + 1
+        )
+        fmt_on_leaf.replace_with(Leaf(fmt_comment.type, fmt_comment.value))
+        fmt_off_leaf.remove()
+        return True
+    return False
+
+
+def convert_one_fmt_off_pair(node: Node) -> bool:
+    """
+    Convert content of a single `# fmt: off`/`# fmt: on` into a standalone comment.
+
+    This function searches for the `# fmt: off` and `# fmt: on` pairs in the
+    given node's leaves and converts their contents into a standalone comment.
+    Returns True if a pair was converted, False otherwise.
+
+    Args:
+        node (Node): The node to process.
+
+    Returns:
+        bool: True if a pair was converted; False otherwise.
+    """
+    fmt_off_leaf, fmt_off_index = find_fmt_off_leaf(node)
+    fmt_on_leaf = find_fmt_on_leaf(node, fmt_off_index)
+    return convert_fmt_off_pair_contents(fmt_off_leaf, fmt_on_leaf)
+
+
 def find_fmt_off_on_pair(node: Node) -> Optional[List[Node]]:
     """
     Find a pair of `# fmt: off` and `# fmt: on` in the code tree.
@@ -87,31 +176,6 @@ def find_fmt_off_on_pair(node: Node) -> Optional[List[Node]]:
                 return node.children[pair[0] + 1 : pair[1]]
 
     return None
-
-
-def convert_one_fmt_off_pair(node: Node) -> bool:
-    """
-    Convert one pair of `# fmt: off`/`# fmt: on` into standalone comments.
-
-    This helper function modifies the code tree, removing code nodes
-    between `# fmt: off` and `# fmt: on` and reinserting them as
-    standalone comment nodes.
-
-    Args:
-        node (Node): The root node of the code tree to be normalized.
-
-    Returns:
-        bool: Returns True if a pair of `# fmt: off`/`# fmt: on` was found
-              and converted, False otherwise.
-    """
-    fmt_off_on_pair = find_fmt_off_on_pair(node)
-    if fmt_off_on_pair is None:
-        return False
-
-    for child in fmt_off_on_pair:
-        child.type = token.COMMENT
-        child.value = f"# {child.value}"
-    return True
 
 COMMENT_EXCEPTIONS = " !:#'"
 
