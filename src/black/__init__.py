@@ -42,6 +42,9 @@ from typing import Sized
 from click import Context
 from typing import Optional, Tuple
 from black import Mode, Report, WriteBack
+from typing import Any, Dict, Union
+
+PathLike = Union[str, Path]
 
 
 # Please note: `format_stdin_to_stdout` was already in scope, so I didn't add it.
@@ -107,6 +110,135 @@ COMPILED = Path(__file__).suffix in (".pyd", ".so")
 # types
 FileContent = str
 Encoding = str
+
+
+def is_stdin_path(src: Path) -> bool:
+    """Determine if the given path represents stdin.
+
+    Args:
+        src (Path): The path to be checked.
+
+    Returns:
+        bool: True if the path represents stdin, otherwise False.
+    """
+    if str(src) == "-" or str(src).startswith(STDIN_PLACEHOLDER):
+        return True
+    else:
+        return False
+
+
+def adjust_mode(src: Path, mode: Mode) -> Mode:
+    """Adjust the input mode according to the file suffix.
+
+    Args:
+        src (Path): The path to the file.
+        mode (Mode): The current configuration mode.
+
+    Returns:
+        Mode: Updated mode based on the file suffix.
+    """
+    if src.suffix == ".pyi":
+        return replace(mode, is_pyi=True)
+    elif src.suffix == ".ipynb":
+        return replace(mode, is_ipynb=True)
+    else:
+        return mode
+
+
+def handle_cache(src: Path, write_back: WriteBack, mode: Mode) -> Tuple[Cache, Changed]:
+    """Handle cache related operations.
+
+    Args:
+        src (Path): The file path.
+        write_back (WriteBack): How the reformatted code should be written back.
+        mode (Mode): The configuration mode for Black.
+
+    Returns:
+        Tuple[Cache, Changed]: The cache object and the Changed status.
+    """
+    cache: Cache = {}
+    changed = Changed.NO
+
+    if write_back not in (WriteBack.DIFF, WriteBack.COLOR_DIFF):
+        cache = read_cache(mode)
+        res_src = src.resolve()
+        res_src_s = str(res_src)
+
+        if res_src_s in cache and cache[res_src_s] == get_cache_info(res_src):
+            changed = Changed.CACHED
+
+    return cache, changed
+
+
+def process_stdin_or_file(
+    src: Path, fast: bool, write_back: WriteBack, mode: Mode, cache: Cache
+) -> Changed:
+    """Process standard input or regular file.
+
+    Args:
+        src (Path): The path to the file.
+        fast (bool): If True, skip string normalization and temporary trailing comma.
+        write_back (WriteBack): How the reformatted code should be written back.
+        mode (Mode): The configuration mode for Black.
+        cache (Cache): The cache object.
+
+    Returns:
+        Changed: The status of whether the file was changed or not during processing.
+    """
+    changed = Changed.NO
+
+    if format_stdin_to_stdout(fast=fast, write_back=write_back, mode=mode):
+        changed = Changed.YES
+
+    else:
+        if write_back not in (WriteBack.DIFF, WriteBack.COLOR_DIFF):
+            if (write_back is WriteBack.YES and changed is not Changed.CACHED) or (
+                write_back is WriteBack.CHECK and changed is Changed.NO
+            ):
+                write_cache(cache, [src], mode)
+
+    return changed
+
+
+def reformat_one(
+    src: Path, fast: bool, write_back: WriteBack, mode: Mode, report: "Report"
+) -> None:
+    """
+    Reformat a single file under `src` without spawning child processes.
+
+    `fast`, `write_back`, and `mode` options are passed to
+    :func:`format_file_in_place` or :func:`format_stdin_to_stdout`.
+
+    Args:
+        src (Path): The path to the file to be reformatted.
+        fast (bool): If True, skip string normalization and temporary trailing comma.
+        write_back (WriteBack): How the reformatted code should be written back.
+        mode (Mode): The configuration mode for, report: "Report".
+    """
+    try:
+        if is_stdin_path(src):
+            src = Path(str(src)[len(STDIN_PLACEHOLDER) :])
+            mode = adjust_mode(src, mode)
+            changed = process_stdin_or_file(src, fast, write_back, mode, cache={})
+        else:
+            mode = adjust_mode(src, mode)
+            cache, changed = handle_cache(src, write_back, mode)
+
+            if changed is not Changed.CACHED and format_file_in_place(
+                src, fast=fast, write_back=write_back, mode=mode
+            ):
+                changed = Changed.YES
+
+            if (write_back is WriteBack.YES and changed is not Changed.CACHED) or (
+                write_back is WriteBack.CHECK and changed is Changed.NO
+            ):
+                write_cache(cache, [src], mode)
+
+        report.done(src, changed)
+    except Exception as exc:
+        if report.verbose:
+            traceback.print_exc()
+        report.failed(src, str(exc))
 NewLine = str
 
 
@@ -1000,60 +1132,6 @@ def main(  # noqa: C901
         if code is None:
             click.echo(str(report), err=True)
     ctx.exit(report.return_code)
-
-
-# diff-shades depends on being to monkeypatch this function to operate. I know it's
-# not ideal, but this shouldn't cause any issues ... hopefully. ~ichard26
-@mypyc_attr(patchable=True)
-def reformat_one(
-    src: Path, fast: bool, write_back: WriteBack, mode: Mode, report: "Report"
-) -> None:
-    """Reformat a single file under `src` without spawning child processes.
-
-    `fast`, `write_back`, and `mode` options are passed to
-    :func:`format_file_in_place` or :func:`format_stdin_to_stdout`.
-    """
-    try:
-        changed = Changed.NO
-
-        if str(src) == "-":
-            is_stdin = True
-        elif str(src).startswith(STDIN_PLACEHOLDER):
-            is_stdin = True
-            # Use the original name again in case we want to print something
-            # to the user
-            src = Path(str(src)[len(STDIN_PLACEHOLDER) :])
-        else:
-            is_stdin = False
-
-        if is_stdin:
-            if src.suffix == ".pyi":
-                mode = replace(mode, is_pyi=True)
-            elif src.suffix == ".ipynb":
-                mode = replace(mode, is_ipynb=True)
-            if format_stdin_to_stdout(fast=fast, write_back=write_back, mode=mode):
-                changed = Changed.YES
-        else:
-            cache: Cache = {}
-            if write_back not in (WriteBack.DIFF, WriteBack.COLOR_DIFF):
-                cache = read_cache(mode)
-                res_src = src.resolve()
-                res_src_s = str(res_src)
-                if res_src_s in cache and cache[res_src_s] == get_cache_info(res_src):
-                    changed = Changed.CACHED
-            if changed is not Changed.CACHED and format_file_in_place(
-                src, fast=fast, write_back=write_back, mode=mode
-            ):
-                changed = Changed.YES
-            if (write_back is WriteBack.YES and changed is not Changed.CACHED) or (
-                write_back is WriteBack.CHECK and changed is Changed.NO
-            ):
-                write_cache(cache, [src], mode)
-        report.done(src, changed)
-    except Exception as exc:
-        if report.verbose:
-            traceback.print_exc()
-        report.failed(src, str(exc))
 
 
 def format_file_in_place(
