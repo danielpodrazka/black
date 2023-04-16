@@ -53,6 +53,7 @@ from black.output import color_diff, diff, wrap_stream_for_windows
 from black.cache import decode_bytes
 
 from black import Mode
+from typing import Tuple
 
 PathLike = Union[str, Path]
 
@@ -80,6 +81,57 @@ from black.const import (
     DEFAULT_LINE_LENGTH,
     STDIN_PLACEHOLDER,
 )
+
+
+def format_ipynb_contents(src_contents: str, fast: bool, mode: Mode) -> str:
+    try:
+        cells = json.loads(src_contents)["cells"]
+    except JSONDecodeError as je:
+        err(f"error: cannot parse the notebook: {je}")
+        raise InvalidInput
+
+    for i, cell in enumerate(cells):
+        validate_cell(cell, i)
+        cell["source"] = format_cell(cell["source"], fast=fast, mode=mode)
+
+    ipynb = json.dumps({"cells": cells}, ensure_ascii=False, indent=1)
+    out(f"{ipynb}\n\n")
+    return ipynb
+
+
+def format_non_ipynb_contents(src_contents: str, mode: Mode) -> str:
+    dst_contents = format_str(src_contents, mode=mode)
+    check_stability_and_equivalence(src_contents, dst_contents, mode=mode)
+    return dst_contents
+
+
+def format_file_contents(src_contents: str, *, fast: bool, mode: Mode) -> str:
+    """Reformat the contents of a file and return the new contents.
+
+    If `fast` is False, additionally confirm that the reformatted code is
+    valid by calling :func:`assert_equivalent` and :func:`assert_stable` on it.
+    `mode` is passed to :func:`format_str`.
+
+    Args:
+        src_contents (str): The original content of the file.
+        fast (bool): If False, perform additional checks on the reformatted code.
+        mode (Mode): The mode configuration for formatting.
+
+    Raises:
+        NothingChanged: If no changes have been made to the original file content.
+
+    Returns:
+        str: The reformatted file content.
+    """
+    if mode.is_ipynb:
+        dst_contents = format_ipynb_contents(src_contents, fast=fast, mode=mode)
+    else:
+        dst_contents = format_non_ipynb_contents(src_contents, mode=mode)
+
+    if src_contents == dst_contents:
+        raise NothingChanged
+
+    return dst_contents
 
 
 def assert_equivalent(src_contents: str, dst_contents: str) -> None:
@@ -1376,26 +1428,6 @@ def main(  # noqa: C901
         if code is None:
             click.echo(str(report), err=True)
     ctx.exit(report.return_code)
-
-
-def format_file_contents(src_contents: str, *, fast: bool, mode: Mode) -> FileContent:
-    """Reformat contents of a file and return new contents.
-
-    If `fast` is False, additionally confirm that the reformatted code is
-    valid by calling :func:`assert_equivalent` and :func:`assert_stable` on it.
-    `mode` is passed to :func:`format_str`.
-    """
-    if mode.is_ipynb:
-        dst_contents = format_ipynb_string(src_contents, fast=fast, mode=mode)
-    else:
-        dst_contents = format_str(src_contents, mode=mode)
-    if src_contents == dst_contents:
-        raise NothingChanged
-
-    if not fast and not mode.is_ipynb:
-        # Jupyter notebooks will already have been checked above.
-        check_stability_and_equivalence(src_contents, dst_contents, mode=mode)
-    return dst_contents
 
 
 def validate_cell(src: str, mode: Mode) -> None:
