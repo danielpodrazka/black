@@ -52,6 +52,8 @@ from black import format_file_contents, NothingChanged
 from black.output import color_diff, diff, wrap_stream_for_windows
 from black.cache import decode_bytes
 
+from black import Mode
+
 PathLike = Union[str, Path]
 
 
@@ -78,6 +80,61 @@ from black.const import (
     DEFAULT_LINE_LENGTH,
     STDIN_PLACEHOLDER,
 )
+
+
+def assert_equivalent(src_contents: str, dst_contents: str) -> None:
+    """Check if the original source content and the formatted content are equivalent.
+
+    Args:
+        src_contents (str): The original source code.
+        dst_contents (str): The formatted version of src_contents.
+
+    Raises:
+        AssertionError: If the source and destination contents are not equivalent.
+    """
+    actual_src_ast = parse_ast(src_contents)
+    actual_dst_ast = parse_ast(dst_contents)
+    assert actual_src_ast, "cannot parse src_contents"
+    assert actual_dst_ast, "cannot parse dst_contents"
+    assert actual_src_ast == actual_dst_ast, "ASTs do not match"
+
+
+def assert_stable(src_contents: str, dst_contents: str, *, mode: Mode) -> None:
+    """Check if a second pass of the formatter is stable.
+
+    Args:
+        src_contents (str): The original source code.
+        dst_contents (str): The formatted version of src_contents.
+        mode (Mode): The black formatting mode/option settings.
+
+    Raises:
+        AssertionError: If a second pass of the formatter would format the content differently.
+    """
+    double_dst_contents = format_file_contents(dst_contents, mode=mode)
+    assert dst_contents == double_dst_contents, "not stable"
+
+
+def check_stability_and_equivalence(
+    src_contents: str, dst_contents: str, *, mode: Mode
+) -> None:
+    """Perform stability and equivalence checks.
+
+    This function checks whether the formatted code is equivalent to the
+    original code and if the formatter is stable (i.e., a second pass would not
+    change the output).
+
+    Args:
+        src_contents (str): The original source code.
+        dst_contents (str): The formatted version of src_contents.
+        mode (Mode): The black formatting mode/option settings.
+
+    Raises:
+        AssertionError: If the source and destination contents are not
+                        equivalent, or if a second pass of the formatter would
+                        format the content differently.
+    """
+    assert_equivalent(src_contents, dst_contents)
+    assert_stable(src_contents, dst_contents, mode=mode)
 from black.files import (
     find_project_root,
     find_pyproject_toml,
@@ -1319,19 +1376,6 @@ def main(  # noqa: C901
         if code is None:
             click.echo(str(report), err=True)
     ctx.exit(report.return_code)
-
-
-def check_stability_and_equivalence(
-    src_contents: str, dst_contents: str, *, mode: Mode
-) -> None:
-    """Perform stability and equivalence checks.
-
-    Raise AssertionError if source and destination contents are not
-    equivalent, or if a second pass of the formatter would format the
-    content differently.
-    """
-    assert_equivalent(src_contents, dst_contents)
-    assert_stable(src_contents, dst_contents, mode=mode)
 
 
 def format_file_contents(src_contents: str, *, fast: bool, mode: Mode) -> FileContent:
