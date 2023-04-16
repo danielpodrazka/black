@@ -23,6 +23,7 @@ from black.output import err
 from black.report import Changed, Report
 from typing import Optional
 from typing import Iterable, Any
+from typing import List, Tuple
 
 
 def maybe_install_uvloop() -> None:
@@ -40,6 +41,72 @@ def maybe_install_uvloop() -> None:
     uvloop_module = attempt_uvloop_import()
     if uvloop_module is not None:
         install_uvloop(uvloop_module)
+
+
+def gather_tasks(loop: asyncio.AbstractEventLoop) -> List[asyncio.Task]:
+    """
+    Gather all pending tasks from the given `loop`.
+
+    Args:
+        loop (asyncio.AbstractEventLoop): The event loop containing the tasks.
+
+    Returns:
+        List[asyncio.Task]: A list of all pending tasks.
+    """
+    return [task for task in asyncio.all_tasks(loop) if not task.done()]
+
+
+def cancel_tasks(tasks: List[asyncio.Task]) -> None:
+    """
+    Cancel all tasks in the given list.
+
+    Args:
+        tasks (List[asyncio.Task]): A list of tasks to cancel.
+
+    Returns:
+        None
+    """
+    for task in tasks:
+        task.cancel()
+
+
+def silence_concurrent_futures() -> None:
+    """
+    Silence the logging of concurrent.futures to avoid spewing about the
+    event loop being closed.
+
+    Returns:
+        None
+    """
+    cf_logger = logging.getLogger("concurrent.futures")
+    cf_logger.setLevel(logging.CRITICAL)
+
+
+def shutdown(loop: asyncio.AbstractEventLoop) -> None:
+    """
+    Cancel all pending tasks on the given `loop`, wait for them, and close the loop.
+
+    This function is responsible for gracefully shutting down the asyncio event loop,
+    ensuring that all tasks are cancelled and completed before closing the loop.
+    It is used to prevent hanging tasks when stopping the program.
+
+    Args:
+        loop (asyncio.AbstractEventLoop): The event loop containing the tasks to
+                                          cancel and shut down.
+
+    Returns:
+        None
+    """
+    try:
+        to_cancel = gather_tasks(loop)
+        if not to_cancel:
+            return
+
+        cancel_tasks(to_cancel)
+        loop.run_until_complete(asyncio.gather(*to_cancel, return_exceptions=True))
+    finally:
+        silence_concurrent_futures()
+        loop.close()
 
 
 def abort() -> None:
@@ -82,26 +149,6 @@ def attempt_uvloop_import() -> Optional[Any]:
 def install_uvloop(uvloop_module: Any) -> None:
     """Install uvloop as the event loop policy."""
     uvloop_module.install()
-
-
-def shutdown(loop: asyncio.AbstractEventLoop) -> None:
-    """Cancel all pending tasks on `loop`, wait for them, and close the loop."""
-    try:
-        # This part is borrowed from asyncio/runners.py in Python 3.7b2.
-        to_cancel = [task for task in asyncio.all_tasks(loop) if not task.done()]
-        if not to_cancel:
-            return
-
-        for task in to_cancel:
-            task.cancel()
-        loop.run_until_complete(asyncio.gather(*to_cancel, return_exceptions=True))
-    finally:
-        # `concurrent.futures.Future` objects cannot be cancelled once they
-        # are already running. There might be some when the `shutdown()` happened.
-        # Silence their logger's spew about the event loop being closed.
-        cf_logger = logging.getLogger("concurrent.futures")
-        cf_logger.setLevel(logging.CRITICAL)
-        loop.close()
 
 
 # diff-shades depends on being to monkeypatch this function to operate. I know it's
