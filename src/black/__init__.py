@@ -33,6 +33,7 @@ from blib2to3.pytree import Leaf, Node
 from typing import Optional
 from typing import List
 from typing import Callable
+from typing import Pattern
 from typing import (
     Any,
     Dict,
@@ -142,6 +143,39 @@ class WriteBack(Enum):
             WriteBack: The appropriate WriteBack value based on the input configuration.
         """
         return determine_writeback_action(check, diff, color)
+
+
+def add_verbose_mode(regex: str) -> str:
+    """Adds the verbose mode flag to a regex string.
+
+    Args:
+        regex (str): The regular expression string.
+
+    Returns:
+        str: The updated regular expression string with the verbose mode.
+    """
+    return "(?x)" + regex
+
+
+def re_compile_maybe_verbose(regex: str) -> Pattern[str]:
+    """Compile a regular expression string given by `regex`.
+
+    If the input string contains newlines, the compiled pattern uses verbose mode,
+    which ignores whitespace and treats unescaped '#' as a comment marker.
+
+    Args:
+        regex (str): The regular expression string to compile.
+
+    Returns:
+        Pattern[str]: The compiled regular expression pattern.
+
+    """
+    if "\n" not in regex:
+        return re.compile(regex)
+
+    regex = add_verbose_mode(regex)
+    compiled: Pattern[str] = re.compile(regex)
+    return compiled
 
 
 def target_version_string_to_enum(target_version: str) -> TargetVersion:
@@ -303,17 +337,6 @@ def read_pyproject_toml(
 
 # Legacy name, left for integrations.
 FileMode = Mode
-
-
-def re_compile_maybe_verbose(regex: str) -> Pattern[str]:
-    """Compile a regular expression string in `regex`.
-
-    If it contains newlines, use verbose mode.
-    """
-    if "\n" in regex:
-        regex = "(?x)" + regex
-    compiled: Pattern[str] = re.compile(regex)
-    return compiled
 
 
 def validate_regex(
