@@ -22,6 +22,7 @@ from black.mode import Mode
 from black.output import err
 from black.report import Changed, Report
 from typing import Optional
+from typing import Iterable, Any
 
 
 def maybe_install_uvloop() -> None:
@@ -41,6 +42,33 @@ def maybe_install_uvloop() -> None:
         install_uvloop(uvloop_module)
 
 
+def abort() -> None:
+    """Print an abort message to stderr."""
+    err("Aborted!")
+
+
+def cancel_all_tasks(tasks: Iterable["asyncio.Task[Any]"]) -> None:
+    """
+    Cancel all given asyncio tasks.
+
+    Args:
+        tasks: Iterable of asyncio tasks to be canceled.
+    """
+    for task in tasks:
+        task.cancel()
+
+
+def cancel(tasks: Iterable["asyncio.Task[Any]"]) -> None:
+    """
+    asyncio signal handler that cancels all given tasks and reports the abort message to stderr.
+
+    Args:
+        tasks: Iterable of asyncio tasks to be canceled.
+    """
+    abort()
+    cancel_all_tasks(tasks)
+
+
 def attempt_uvloop_import() -> Optional[Any]:
     """Attempt to import uvloop and return the module if successful, None otherwise."""
     try:
@@ -54,13 +82,6 @@ def attempt_uvloop_import() -> Optional[Any]:
 def install_uvloop(uvloop_module: Any) -> None:
     """Install uvloop as the event loop policy."""
     uvloop_module.install()
-
-
-def cancel(tasks: Iterable["asyncio.Task[Any]"]) -> None:
-    """asyncio signal handler that cancels all `tasks` and reports to stderr."""
-    err("Aborted!")
-    for task in tasks:
-        task.cancel()
 
 
 def shutdown(loop: asyncio.AbstractEventLoop) -> None:
