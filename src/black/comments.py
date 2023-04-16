@@ -6,6 +6,11 @@ from typing import Iterator, List, Optional, Union
 from blib2to3.pgen2 import token
 from blib2to3.pytree import Leaf, Node
 from typing import Iterator, Union, List
+from typing import Optional
+
+
+COMMENT_EXCEPTIONS = ["!", ":", "#"]
+NON_BREAKING_SPACE = " "
 
 
 STANDALONE_COMMENT = token.ST_COMMENT
@@ -57,6 +62,54 @@ class ProtoComment:
     consumed: int  # how many characters of the original leaf's prefix did we consume
 
 
+def make_comment(content: str) -> str:
+    """
+    Format a given comment string consistently.
+
+    All comments (except for "##", "#!", "#:", '#'") should have a single
+    space between the hash sign and the content. If the content didn't start
+    with a hash sign, one is provided.
+
+    Args:
+        content (str): The content to be formatted as a comment.
+
+    Returns:
+        str: The formatted comment string.
+    """
+
+    def strip_trailing_spaces(content: str) -> str:
+        return content.rstrip()
+
+    def remove_initial_hash(content: str) -> str:
+        if content and content[0] == "#":
+            return content[1:]
+        return content
+
+    def replace_nbsp_by_space(content: str) -> str:
+        if (
+            content
+            and content[0] == NON_BREAKING_SPACE
+            and not content.lstrip().startswith("type:")
+        ):
+            return " " + content[1:]
+        return content
+
+    def add_space_if_needed(content: str) -> str:
+        if content and content[0] not in COMMENT_EXCEPTIONS:
+            return " " + content
+        return content
+
+    content = strip_trailing_spaces(content)
+    if not content:
+        return "#"
+
+    content = remove_initial_hash(content)
+    content = replace_nbsp_by_space(content)
+    content = add_space_if_needed(content)
+
+    return "#" + content
+
+
 def is_escaped_newline(
     line: str, index: int, ignored_lines: int, is_endmarker: bool
 ) -> bool:
@@ -101,11 +154,6 @@ def list_comments(prefix: str, *, is_endmarker: bool) -> List[ProtoComment]:
         result.append(create_proto_comment(comment_type, line, nlines, consumed))
         nlines = 0
     return result
-
-
-def make_comment(line: str) -> str:
-    """Create a comment token value by stripping whitespace and dropping the '#'."""
-    return line.lstrip()[1:].rstrip()
 
 
 def create_leaf(pc: ParsedComment) -> Leaf:
