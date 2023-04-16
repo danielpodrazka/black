@@ -37,6 +37,7 @@ from typing import Pattern
 from re import compile as re_compile
 from re import VERBOSE
 from typing import Optional, Pattern
+from typing import Set, Tuple, Pattern
 from typing import (
     Any,
     Dict,
@@ -120,6 +121,95 @@ def determine_writeback_action(check: bool, diff: bool, color: bool) -> "WriteBa
         return WriteBack.DIFF
 
     return WriteBack.YES
+
+
+def is_file_path_excluded(path: Path, exclude: Optional[Pattern[str]]) -> bool:
+    return exclude is not None and exclude.search(str(path)) is not None
+
+
+def is_file_path_force_excluded(
+    path: Path, force_exclude: Optional[Pattern[str]]
+) -> bool:
+    return force_exclude is not None and force_exclude.search(str(path)) is not None
+
+
+def is_file_path_included(path: Path, include: Pattern[str]) -> bool:
+    return include.search(str(path)) is not None
+
+
+def get_file_paths_in_directory(
+    root: Path, include: Pattern[str], exclude: Optional[Pattern[str]]
+) -> Set[Path]:
+    file_paths = set()
+    for child in root.iterdir():
+        if (
+            child.is_file()
+            and is_file_path_included(child, include)
+            and not is_file_path_excluded(child, exclude)
+        ):
+            file_paths.add(child)
+        elif child.is_dir():
+            file_paths |= get_file_paths_in_directory(child, include, exclude)
+    return file_paths
+
+
+def get_sources(
+    *,
+    ctx: click.Context,
+    src: Tuple[str, ...],
+    quiet: bool,
+    verbose: bool,
+    include: Pattern[str],
+    exclude: Optional[Pattern[str]],
+    extend_exclude: Optional[Pattern[str]],
+    force_exclude: Optional[Pattern[str]],
+    report: "Report",
+    stdin_filename: Optional[str],
+) -> Set[Path]:
+    """
+    Compute the set of files to be formatted.
+
+    Args:
+        ctx (click.Context): The Click context object.
+        src (Tuple[str, ...]): A tuple of file paths or directory paths.
+        quiet (bool): If True, suppress non-critical output.
+        verbose (bool): If True, print debugging information.
+        include (Pattern[str]): A regex pattern for file names to include.
+        exclude (Optional[Pattern[str]]): A regex pattern for file names to exclude. None by default.
+        extend_exclude (Optional[Pattern[str]]): A regex pattern for additional file names to exclude. None by default.
+        force_exclude (Optional[Pattern[str]]): A regex pattern for forcing file names to exclude. None by default.
+        report (Report): A Report object for tracking the results of the formatting process.
+        stdin_filename (Optional[str]): The file name to use for standard input. None by default.
+
+    Returns:
+        Set[Path]: A set of Path objects representing files to be formatted.
+    """
+
+    sources: Set[Path] = set()
+    root = ctx.obj["root"]
+
+    if not src:
+        if not quiet:
+            report.finished(paths=sources)
+        return sources
+
+    for s in src:
+        path = root / s
+        if path.is_file():
+            if not is_file_path_force_excluded(path, force_exclude):
+                sources.add(path)
+        elif path.is_dir():
+            dir_file_paths = get_file_paths_in_directory(path, include, exclude)
+            sources |= dir_file_paths.difference(
+                p
+                for p in dir_file_paths
+                if is_file_path_force_excluded(p, force_exclude)
+            )
+
+    if len(sources) == 0 and not quiet:
+        report.finished(paths=sources)
+
+    return sources
 
 
 class WriteBack(Enum):
@@ -800,88 +890,6 @@ def main(  # noqa: C901
         if code is None:
             click.echo(str(report), err=True)
     ctx.exit(report.return_code)
-
-
-def get_sources(
-    *,
-    ctx: click.Context,
-    src: Tuple[str, ...],
-    quiet: bool,
-    verbose: bool,
-    include: Pattern[str],
-    exclude: Optional[Pattern[str]],
-    extend_exclude: Optional[Pattern[str]],
-    force_exclude: Optional[Pattern[str]],
-    report: "Report",
-    stdin_filename: Optional[str],
-) -> Set[Path]:
-    """Compute the set of files to be formatted."""
-    sources: Set[Path] = set()
-    root = ctx.obj["root"]
-
-    using_default_exclude = exclude is None
-    exclude = re_compile_maybe_verbose(DEFAULT_EXCLUDES) if exclude is None else exclude
-    gitignore: Optional[Dict[Path, PathSpec]] = None
-    root_gitignore = get_gitignore(root)
-
-    for s in src:
-        if s == "-" and stdin_filename:
-            p = Path(stdin_filename)
-            is_stdin = True
-        else:
-            p = Path(s)
-            is_stdin = False
-
-        if is_stdin or p.is_file():
-            normalized_path = normalize_path_maybe_ignore(p, ctx.obj["root"], report)
-            if normalized_path is None:
-                continue
-
-            normalized_path = "/" + normalized_path
-            # Hard-exclude any files that matches the `--force-exclude` regex.
-            if force_exclude:
-                force_exclude_match = force_exclude.search(normalized_path)
-            else:
-                force_exclude_match = None
-            if force_exclude_match and force_exclude_match.group(0):
-                report.path_ignored(p, "matches the --force-exclude regular expression")
-                continue
-
-            if is_stdin:
-                p = Path(f"{STDIN_PLACEHOLDER}{str(p)}")
-
-            if p.suffix == ".ipynb" and not jupyter_dependencies_are_installed(
-                verbose=verbose, quiet=quiet
-            ):
-                continue
-
-            sources.add(p)
-        elif p.is_dir():
-            p = root / normalize_path_maybe_ignore(p, ctx.obj["root"], report)
-            if using_default_exclude:
-                gitignore = {
-                    root: root_gitignore,
-                    p: get_gitignore(p),
-                }
-            sources.update(
-                gen_python_files(
-                    p.iterdir(),
-                    ctx.obj["root"],
-                    include,
-                    exclude,
-                    extend_exclude,
-                    force_exclude,
-                    report,
-                    gitignore,
-                    verbose=verbose,
-                    quiet=quiet,
-                )
-            )
-        elif s == "-":
-            sources.add(p)
-        else:
-            err(f"invalid path: {s}")
-    return sources
 
 
 def path_empty(
