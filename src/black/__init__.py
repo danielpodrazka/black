@@ -34,6 +34,9 @@ from typing import Optional
 from typing import List
 from typing import Callable
 from typing import Pattern
+from re import compile as re_compile
+from re import VERBOSE
+from typing import Optional, Pattern
 from typing import (
     Any,
     Dict,
@@ -143,6 +146,44 @@ class WriteBack(Enum):
             WriteBack: The appropriate WriteBack value based on the input configuration.
         """
         return determine_writeback_action(check, diff, color)
+
+
+def re_compile_maybe_verbose(value: Optional[str]) -> Optional[Pattern[str]]:
+    """Compile a regular expression string into a pattern, considering the VERBOSE flag.
+
+    Args:
+        value (Optional[str]): The regular expression string to compile, if provided.
+
+    Returns:
+        Optional[Pattern[str]]: The compiled regex pattern, otherwise None.
+    """
+    if value is None:
+        return None
+    return re_compile(value, VERBOSE)
+
+
+def validate_regex(
+    ctx: click.Context,
+    param: click.Parameter,
+    value: Optional[str],
+) -> Optional[Pattern[str]]:
+    """Validate a user provided regular expression and raise an error if invalid.
+
+    Args:
+        ctx (click.Context): The command context provided by Click.
+        param (click.Parameter): The parameter that triggered the validation.
+        value (Optional[str]): The string value to validate as a regex, if provided.
+
+    Returns:
+        Optional[Pattern[str]]: The compiled regex pattern if valid, otherwise None.
+
+    Raises:
+        click.BadParameter: If the provided value is not a valid regular expression.
+    """
+    try:
+        return re_compile_maybe_verbose(value)
+    except re.error as e:
+        raise click.BadParameter(f"Not a valid regular expression: {e}") from None
 
 
 def add_verbose_mode(regex: str) -> str:
@@ -337,17 +378,6 @@ def read_pyproject_toml(
 
 # Legacy name, left for integrations.
 FileMode = Mode
-
-
-def validate_regex(
-    ctx: click.Context,
-    param: click.Parameter,
-    value: Optional[str],
-) -> Optional[Pattern[str]]:
-    try:
-        return re_compile_maybe_verbose(value) if value is not None else None
-    except re.error as e:
-        raise click.BadParameter(f"Not a valid regular expression: {e}") from None
 
 
 @click.command(
