@@ -10,6 +10,8 @@ from typing import Optional
 from typing import Tuple
 from typing import Iterator, Union
 from typing import Iterator, List, Optional, Tuple, Union
+from typing import List
+from blib2to3.pytree import Leaf
 
 LN = Union[Leaf, Node]  # LN is an alias for a Leaf or Node Union type
 
@@ -55,6 +57,35 @@ FMT_OFF: Final = {"# fmt: off", "# fmt:off", "# yapf: disable"}
 FMT_SKIP: Final = {"# fmt: skip", "# fmt:skip"}
 FMT_PASS: Final = {*FMT_OFF, *FMT_SKIP}
 FMT_ON: Final = {"# fmt: on", "# fmt:on", "# yapf: enable"}
+
+
+def is_pragma_comment(comment: Leaf) -> bool:
+    """
+    Check if a comment is a static analysis pragma.
+
+    Args:
+        comment: A `Leaf` object representing a comment in the code.
+
+    Returns:
+        True if the comment is a static analysis pragma, False otherwise.
+    """
+    return comment.value.startswith(("# type:", "# noqa", "# pylint:"))
+
+
+def contains_pragma_comment(comment_list: List[Leaf]) -> bool:
+    """
+    Check if a list of comments contains static analysis pragmas.
+
+    This function verifies if at least one of the comments in the provided list is a pragma
+    used by popular static analysis tools for Python, such as mypy, flake8, and pylint.
+
+    Args:
+        comment_list: A list of `Leaf` objects representing comments in the code.
+
+    Returns:
+        True if at least one of the comments is a static analysis pragma, False otherwise.
+    """
+    return any(is_pragma_comment(comment) for comment in comment_list)
 
 
 def is_fmt_on(container: Union[Leaf, Node]) -> bool:
@@ -701,20 +732,6 @@ def convert_one_fmt_off_pair(node: Node) -> bool:
                     fmt_pass_converted_first_leaf=first_leaf_of(first),
                 ),
             )
-            return True
-
-    return False
-
-
-def contains_pragma_comment(comment_list: List[Leaf]) -> bool:
-    """
-    Returns:
-        True iff one of the comments in @comment_list is a pragma used by one
-        of the more common static analysis tools for python (e.g. mypy, flake8,
-        pylint).
-    """
-    for comment in comment_list:
-        if comment.value.startswith(("# type:", "# noqa", "# pylint:")):
             return True
 
     return False
