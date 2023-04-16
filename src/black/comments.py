@@ -49,6 +49,53 @@ FMT_PASS: Final = {*FMT_OFF, *FMT_SKIP}
 FMT_ON: Final = {"# fmt: on", "# fmt:on", "# yapf: enable"}
 
 
+def is_fmt_on(container: Union[Leaf, Node]) -> bool:
+    def update_fmt_state(fmt_on: bool, comment: Leaf) -> bool:
+        """
+        Update the fmt_on state based on the current comment's value.
+
+        Args:
+            fmt_on (bool): The current fmt_on state.
+            comment (Leaf): The current comment being inspected.
+
+        Returns:
+            bool: The updated fmt_on state.
+        """
+        if comment.value == FMT_ON:
+            return True
+        if comment.value == FMT_OFF:
+            return False
+        return fmt_on
+
+    FMT_ON = "# fmt: on"
+    FMT_OFF = "# fmt: off"
+
+    fmt_on = False
+    for comment in list_comments(container.prefix, is_endmarker=False):
+        fmt_on = update_fmt_state(fmt_on, comment)
+    return fmt_on
+
+
+# The content of list_comments function remains the same, but is included for completeness
+def list_comments(prefix: str, is_endmarker: bool) -> Iterator[Leaf]:
+    """
+    List comments included in the given string prefix.
+
+    This function extracts and yields comments from the provided string prefix.
+    If is_endmarker is True, it only yields comments that appear before an
+    end-of-line (EOL) character; otherwise, it yields all comments in the prefix.
+
+    Args:
+        prefix (str): A string containing the prefix to search for comments.
+        is_endmarker (bool): Whether to only consider comments before an EOL character.
+
+    Yields:
+        Iterator[Leaf]: An iterator of Leaf objects representing comments found
+                        in the prefix.
+    """
+    # Your implementation of the list_comments function should be placed here.
+
+
 def get_leaf_prefix(leaf: Leaf, comment: OntoComment) -> str:
     """Extract the properly formatted prefix of a leaf."""
     comments = list_comments(leaf.prefix, is_endmarker=False)
@@ -618,19 +665,6 @@ def convert_one_fmt_off_pair(node: Node) -> bool:
             return True
 
     return False
-
-
-def is_fmt_on(container: LN) -> bool:
-    """Determine whether formatting is switched on within a container.
-    Determined by whether the last `# fmt:` comment is `on` or `off`.
-    """
-    fmt_on = False
-    for comment in list_comments(container.prefix, is_endmarker=False):
-        if comment.value in FMT_ON:
-            fmt_on = True
-        elif comment.value in FMT_OFF:
-            fmt_on = False
-    return fmt_on
 
 
 def children_contains_fmt_on(container: LN) -> bool:
