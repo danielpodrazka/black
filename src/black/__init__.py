@@ -45,6 +45,12 @@ from black import Mode, Report, WriteBack
 from typing import Any, Dict, Union
 from contextlib import ContextDecorator
 from typing import Any, Callable, Union
+from io import TextIOWrapper
+from sys import stdin, stdout
+from black import WriteBack, Mode
+from black import format_file_contents, NothingChanged
+from black.output import color_diff, diff, wrap_stream_for_windows
+from black.cache import decode_bytes
 
 PathLike = Union[str, Path]
 
@@ -108,6 +114,99 @@ from black.nodes import (
 )
 
 COMPILED = Path(__file__).suffix in (".pyd", ".so")
+
+
+def _read_content(content: Optional[str]) -> Tuple[str, str, str]:
+    """Read content from `content` or stdin.
+
+    Args:
+        content (Optional[str]): A string containing the Python code to format. If None
+            (default), the function reads from stdin.
+
+    Returns:
+        Tuple[str, str, str]: The content, encoding, and newline character.
+    """
+    if content is None:
+        return decode_bytes(stdin.buffer.read())
+    else:
+        return content, "utf-8", ""
+
+
+def _write_output(
+    stdout_buffer: TextIOWrapper,
+    write_back: WriteBack,
+    src: str,
+    dst: str,
+    then: datetime,
+    now: datetime,
+) -> None:
+    """Write the formatted code or diff to stdout.
+
+    Args:
+        stdout_buffer (TextIOWrapper): An open IO buffer to stdout.
+        write_back (WriteBack): Controls the output behavior.
+        src (str): The original (unformatted) code.
+        dst (str): The formatted code.
+        then (datetime): The timestamp of the original code.
+        now (datetime): The timestamp of the formatted code.
+    """
+    if write_back == WriteBack.YES:
+        if dst and dst[-1] != "\n":
+            dst += "\n"
+        stdout_buffer.write(dst)
+    elif write_back in (WriteBack.DIFF, WriteBack.COLOR_DIFF):
+        src_name = f"STDIN\t{then} +0000"
+        dst_name = f"STDOUT\t{now} +0000"
+        d = diff(src, dst, src_name, dst_name)
+        if write_back == WriteBack.COLOR_DIFF:
+            d = color_diff(d)
+            stdout_buffer = wrap_stream_for_windows(stdout_buffer)
+        stdout_buffer.write(d)
+
+
+def format_stdin_to_stdout(
+    fast: bool,
+    *,
+    content: Optional[str] = None,
+    write_back: WriteBack = WriteBack.NO,
+    mode: Mode,
+) -> bool:
+    """
+    Format Python code from stdin and print the result to stdout.
+
+    Args:
+        fast: If True, skip most consistency checks.
+        content (Optional[str]): A string containing the Python code to format. If None
+            (default), the function reads from stdin.
+        write_back (WriteBack, optional): Controls the output behavior. If WriteBack.NO
+            (default), do not write anything to stdout. If WriteBack.YES, write the
+            formatted code to stdout. If WriteBack.DIFF or WriteBack.COLOR_DIFF,
+            write a diff of the changes to stdout.
+        mode (Mode): Formatting options.
+
+    Returns:
+        bool: True if the input code was changed, False otherwise.
+
+    Raises:
+        NothingChanged: If the input code has not been changed after formatting.
+    """
+    then = datetime.utcnow()
+    src, encoding, newline = _read_content(content)
+    dst = src
+
+    try:
+        dst = format_file_contents(src, fast=fast, mode=mode)
+        code_changed = True
+    except NothingChanged:
+        code_changed = False
+
+    f = TextIOWrapper(
+        stdout.buffer, encoding=encoding, newline=newline, write_through=True
+    )
+    _write_output(f, write_back, src, dst, then, datetime.utcnow())
+    f.detach()
+
+    return code_changed
 
 # types
 FileContent = str
@@ -1220,57 +1319,6 @@ def main(  # noqa: C901
         if code is None:
             click.echo(str(report), err=True)
     ctx.exit(report.return_code)
-
-
-def format_stdin_to_stdout(
-    fast: bool,
-    *,
-    content: Optional[str] = None,
-    write_back: WriteBack = WriteBack.NO,
-    mode: Mode,
-) -> bool:
-    """Format file on stdin. Return True if changed.
-
-    If content is None, it's read from sys.stdin.
-
-    If `write_back` is YES, write reformatted code back to stdout. If it is DIFF,
-    write a diff to stdout. The `mode` argument is passed to
-    :func:`format_file_contents`.
-    """
-    then = datetime.utcnow()
-
-    if content is None:
-        src, encoding, newline = decode_bytes(sys.stdin.buffer.read())
-    else:
-        src, encoding, newline = content, "utf-8", ""
-
-    dst = src
-    try:
-        dst = format_file_contents(src, fast=fast, mode=mode)
-        return True
-
-    except NothingChanged:
-        return False
-
-    finally:
-        f = io.TextIOWrapper(
-            sys.stdout.buffer, encoding=encoding, newline=newline, write_through=True
-        )
-        if write_back == WriteBack.YES:
-            # Make sure there's a newline after the content
-            if dst and dst[-1] != "\n":
-                dst += "\n"
-            f.write(dst)
-        elif write_back in (WriteBack.DIFF, WriteBack.COLOR_DIFF):
-            now = datetime.utcnow()
-            src_name = f"STDIN\t{then} +0000"
-            dst_name = f"STDOUT\t{now} +0000"
-            d = diff(src, dst, src_name, dst_name)
-            if write_back == WriteBack.COLOR_DIFF:
-                d = color_diff(d)
-                f = wrap_stream_for_windows(f)
-            f.write(d)
-        f.detach()
 
 
 def check_stability_and_equivalence(
