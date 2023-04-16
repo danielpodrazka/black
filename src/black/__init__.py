@@ -31,6 +31,7 @@ from black.trans import iter_fexpr_spans
 from blib2to3.pgen2 import token
 from blib2to3.pytree import Leaf, Node
 from typing import Optional
+from typing import List
 from typing import (
     Any,
     Dict,
@@ -142,17 +143,100 @@ class WriteBack(Enum):
         return determine_writeback_action(check, diff, color)
 
 
-# Legacy name, left for integrations.
-FileMode = Mode
+def find_pyproject_toml(src: Tuple[str, ...]) -> Optional[str]:
+    """
+    Find the pyproject.toml file for the given source directories.
+
+    Args:
+        src (Tuple[str, ...]): Source directories to search for "pyproject.toml".
+
+    Returns:
+        Optional[str]: The path to the pyproject.toml file if found, None otherwise.
+    """
+    for directory in map(Path, src):
+        for parent in directory.parents:
+            potential_path = parent / "pyproject.toml"
+            if potential_path.is_file():
+                return str(potential_path)
+    return None
+
+
+def read_pyproject_toml_contents(value: str) -> Dict[str, Any]:
+    """
+    Read and parse the contents of the pyproject.toml file at the given path.
+
+    Args:
+        value (str): The path to the pyproject.toml file.
+
+    Returns:
+        Dict[str, Any]: The parsed configuration.
+
+    Raises:
+        OSError: If there is an error reading the file.
+        ValueError: If there is an error parsing the file.
+    """
+    with open(value) as f:
+        config = toml.load(f)
+
+    return config.get("tool", {}).get("black", {})
+
+
+def update_default_map_with_config(ctx: click.Context, config: Dict[str, Any]) -> None:
+    """
+    Update the default_map attribute of the given click context with the provided
+    configuration.
+
+    Args:
+        ctx (click.Context): The click context to update.
+        config (Dict[str, Any]): The configuration to update the default_map with.
+    """
+    default_map = {}
+    if ctx.default_map:
+        default_map.update(ctx.default_map)
+    default_map.update(config)
+
+    ctx.default_map = default_map
+
+
+def validate_target_version(config: Dict[str, Any]) -> None:
+    """
+    Validate the 'target-version' key in the provided configuration.
+
+    Args:
+        config (Dict[str, Any]): The configuration to validate.
+
+    Raises:
+        click.BadOptionUsage: If the 'target-version' config key value is invalid.
+    """
+    target_version = config.get("target_version")
+    if target_version is not None and not isinstance(target_version, list):
+        raise click.BadOptionUsage(
+            "target-version", "Config key target-version must be a list"
+        )
 
 
 def read_pyproject_toml(
     ctx: click.Context, param: click.Parameter, value: Optional[str]
 ) -> Optional[str]:
-    """Inject Black configuration from "pyproject.toml" into defaults in `ctx`.
+    """
+    Inject Black configuration from "pyproject.toml" into defaults in `ctx`.
 
-    Returns the path to a successfully found and read configuration file, None
-    otherwise.
+    This function tries to locate and read "pyproject.toml" if `value` is not set.
+    Then it evaluates the configuration file and updates the default values in the
+    CLI context with the values defined in the configuration file.
+
+    Args:
+        ctx (click.Context): The click context containing the parameter values.
+        param (click.Parameter): The click parameter being processed.
+        value (Optional[str]): The explicitly specified path to the configuration file.
+
+    Returns:
+        Optional[str]: The path to a successfully found and read configuration file,
+            None otherwise.
+
+    Raises:
+        click.FileError: If there is an error reading the configuration file.
+        click.BadOptionUsage: If the 'target-version' config key value is invalid.
     """
     if not value:
         value = find_pyproject_toml(ctx.params.get("src", ()))
@@ -160,7 +244,7 @@ def read_pyproject_toml(
             return None
 
     try:
-        config = parse_pyproject_toml(value)
+        config = read_pyproject_toml_contents(value)
     except (OSError, ValueError) as e:
         raise click.FileError(
             filename=value, hint=f"Error reading configuration file: {e}"
@@ -169,27 +253,19 @@ def read_pyproject_toml(
     if not config:
         return None
     else:
-        # Sanitize the values to be Click friendly. For more information please see:
-        # https://github.com/psf/black/issues/1458
-        # https://github.com/pallets/click/issues/1567
         config = {
             k: str(v) if not isinstance(v, (list, dict)) else v
             for k, v in config.items()
         }
 
-    target_version = config.get("target_version")
-    if target_version is not None and not isinstance(target_version, list):
-        raise click.BadOptionUsage(
-            "target-version", "Config key target-version must be a list"
-        )
+    validate_target_version(config)
+    update_default_map_with_config(ctx, config)
 
-    default_map: Dict[str, Any] = {}
-    if ctx.default_map:
-        default_map.update(ctx.default_map)
-    default_map.update(config)
-
-    ctx.default_map = default_map
     return value
+
+
+# Legacy name, left for integrations.
+FileMode = Mode
 
 
 def target_version_option_callback(
