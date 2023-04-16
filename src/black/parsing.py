@@ -138,6 +138,55 @@ def parse_single_version(
     return parse_python_using_ast3(src, version, type_comments, filename)
 
 
+def parse_ast(src: str) -> Union[ast.AST, ast.mod]:
+    """
+    Parse a Python source code string into an Abstract Syntax Tree (AST).
+
+    Tries most recent Python versions first, and falls back to previous versions if necessary.
+    Raises a SyntaxError only after trying all supported Python versions, and includes the
+    first encountered error message.
+
+    Args:
+        src (str): The source code to parse into an AST.
+
+    Returns:
+        Union[ast.AST, ast.mod]: The parsed AST. If parsed successfully, returns a tree
+        structure describing the abstract syntax of the Python source code string.
+
+    Raises:
+        SyntaxError: If unable to parse the source code into an AST using all supported
+        Python versions.
+    """
+    versions = _generate_python_versions()
+    first_error = ""
+
+    for version in versions:
+        try:
+            return ast.parse(src, type_comments=True)
+        except SyntaxError as e:
+            first_error = first_error or str(e)
+
+    return _attempt_parse_without_type_comments(src, versions, first_error)
+
+
+def _generate_python_versions() -> List[Tuple[int, int]]:
+    """Generates a list of Python versions to attempt parsing with."""
+    return [(3, minor) for minor in range(3, sys.version_info[1] + 1)]
+
+
+def _attempt_parse_without_type_comments(
+    src: str, versions: List[Tuple[int, int]], first_error: str
+) -> Union[ast.AST, ast.mod]:
+    """Attempts to parse the source code without type comments."""
+    for version in versions:
+        try:
+            return ast.parse(src, type_comments=False)
+        except SyntaxError:
+            pass
+
+    raise SyntaxError(first_error)
+
+
 def parse_python_38_or_higher(
     src: str, version: Tuple[int, int], type_comments: bool, filename: str
 ) -> ast.AST:
@@ -314,28 +363,6 @@ def lib2to3_unparse(node: Node) -> str:
     """Given a lib2to3 node, return its string representation."""
     code = str(node)
     return code
-
-
-def parse_ast(src: str) -> Union[ast.AST, ast3.AST]:
-    # TODO: support Python 4+ ;)
-    versions = [(3, minor) for minor in range(3, sys.version_info[1] + 1)]
-
-    first_error = ""
-    for version in sorted(versions, reverse=True):
-        try:
-            return parse_single_version(src, version, type_comments=True)
-        except SyntaxError as e:
-            if not first_error:
-                first_error = str(e)
-
-    # Try to parse without type comments
-    for version in sorted(versions, reverse=True):
-        try:
-            return parse_single_version(src, version, type_comments=False)
-        except SyntaxError:
-            pass
-
-    raise SyntaxError(first_error)
 
 
 ast3_AST: Final[Type[ast3.AST]] = ast3.AST
