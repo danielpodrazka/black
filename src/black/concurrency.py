@@ -21,20 +21,39 @@ from black.cache import Cache, filter_cached, read_cache, write_cache
 from black.mode import Mode
 from black.output import err
 from black.report import Changed, Report
+from typing import Optional
 
 
 def maybe_install_uvloop() -> None:
-    """If our environment has uvloop installed we use it.
-
-    This is called only from command-line entry points to avoid
-    interfering with the parent process if Black is used as a library.
     """
+    Check if uvloop is installed and use it if available.
+
+    This function tries to import the uvloop package and, if successful, installs it as
+    the event loop policy for improved performance. It is called only from command-line
+    entry points to avoid interfering with the parent process if Black is used as a
+    library.
+
+    This should be called at the beginning of the __main__ entry points of command-line
+    scripts that use the asyncio event loop for better performance.
+    """
+    uvloop_module = attempt_uvloop_import()
+    if uvloop_module is not None:
+        install_uvloop(uvloop_module)
+
+
+def attempt_uvloop_import() -> Optional[Any]:
+    """Attempt to import uvloop and return the module if successful, None otherwise."""
     try:
         import uvloop
 
-        uvloop.install()
+        return uvloop
     except ImportError:
-        pass
+        return None
+
+
+def install_uvloop(uvloop_module: Any) -> None:
+    """Install uvloop as the event loop policy."""
+    uvloop_module.install()
 
 
 def cancel(tasks: Iterable["asyncio.Task[Any]"]) -> None:
