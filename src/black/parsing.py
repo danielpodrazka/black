@@ -17,6 +17,7 @@ from blib2to3.pytree import Leaf, Node
 from typing import Set, List
 
 from black.mode import TargetVersion, Feature, supports_feature
+from typing import List
 
 if sys.version_info < (3, 8):
     from typing_extensions import Final
@@ -172,6 +173,58 @@ def parse_ast(src: str) -> Union[ast.AST, ast.mod]:
 def _generate_python_versions() -> List[Tuple[int, int]]:
     """Generates a list of Python versions to attempt parsing with."""
     return [(3, minor) for minor in range(3, sys.version_info[1] + 1)]
+
+
+def _strip_lines(value: str) -> List[str]:
+    """
+    Strip leading and trailing spaces from each line in the given string.
+
+    Args:
+        value (str): The string value to process.
+
+    Returns:
+        List[str]: A list of stripped lines.
+    """
+    return [line.strip() for line in value.splitlines()]
+
+
+def _remove_blank_lines(lines: List[str]) -> List[str]:
+    """
+    Remove blank lines from the beginning and end of a list of strings.
+
+    Args:
+        lines (List[str]): A list of strings to process.
+
+    Returns:
+        List[str]: A list of strings with blank lines removed from the beginning and end.
+    """
+    while lines and not lines[0]:
+        lines.pop(0)
+
+    while lines and not lines[-1]:
+        lines.pop()
+
+    return lines
+
+
+def _normalize(lineend: str, value: str) -> str:
+    """
+    Normalize the given value using the provided lineend,
+    by stripping leading and trailing space from each line,
+    and removing any blank lines at the beginning and end of the value.
+
+    Args:
+        lineend (str): The line ending used to join the stripped lines.
+        value (str): The string value to normalize.
+
+    Returns:
+        str: The normalized string.
+    """
+    stripped = _strip_lines(value)
+    trimmed = _remove_blank_lines(stripped)
+    normalized = lineend.join(trimmed)
+
+    return normalized.strip()
 
 
 def _attempt_parse_without_type_comments(
@@ -366,16 +419,6 @@ def lib2to3_unparse(node: Node) -> str:
 
 
 ast3_AST: Final[Type[ast3.AST]] = ast3.AST
-
-
-def _normalize(lineend: str, value: str) -> str:
-    # To normalize, we strip any leading and trailing space from
-    # each line...
-    stripped: List[str] = [i.strip() for i in value.splitlines()]
-    normalized = lineend.join(stripped)
-    # ...and remove any blank lines at the beginning and end of
-    # the whole string
-    return normalized.strip()
 
 
 def stringify_ast(node: Union[ast.AST, ast3.AST], depth: int = 0) -> Iterator[str]:
