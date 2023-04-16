@@ -113,6 +113,114 @@ def matches_grammar(src_txt: str, grammar: Grammar) -> bool:
     return parse_source_with_driver(src_txt, drv)
 
 
+def parse_single_version(
+    src: str, version: Tuple[int, int], *, type_comments: bool
+) -> Union[ast.AST, ast3.AST]:
+    """
+    Parse a single version of Python source code.
+
+    Args:
+        src: The source code string to parse.
+        version: A tuple of the Python version to parse the source code for.
+        type_comments: A flag indicating whether to include type comments in the parsed AST.
+
+    Returns:
+        An AST of the parsed source code in the specified Python version format.
+
+    Raises:
+        ParseError: If there is an error during parsing.
+    """
+    filename = "<unknown>"
+
+    if sys.version_info >= (3, 8) and version >= (3,):
+        return parse_python_38_or_higher(src, version, type_comments, filename)
+
+    return parse_python_using_ast3(src, version, type_comments, filename)
+
+
+def parse_python_38_or_higher(
+    src: str, version: Tuple[int, int], type_comments: bool, filename: str
+) -> ast.AST:
+    """
+    Parse Python source code for Python 3.8 or higher using built-in ast.
+
+    Args:
+        src: The source code string to parse.
+        version: A tuple of the Python version to parse the source code for.
+        type_comments: A flag indicating whether to include type comments in the parsed AST.
+        filename: The filename of the source code.
+
+    Returns:
+        An AST of the parsed source code in the specified Python version format.
+    """
+    return ast.parse(
+        src, filename, feature_version=version, type_comments=type_comments
+    )
+
+
+def parse_python_using_ast3(
+    src: str, version: Tuple[int, int], type_comments: bool, filename: str
+) -> ast3.AST:
+    """
+    Parse Python source code using typed-ast (ast3) or default ast in PyPy.
+
+    Args:
+        src: The source code string to parse.
+        version: A tuple of the Python version to parse the source code for.
+        type_comments: A flag indicating whether to include type comments in the parsed AST.
+        filename: The filename of the source code.
+
+    Returns:
+        An AST of the parsed source code in the specified Python version format.
+    """
+    if _IS_PYPY:
+        return parse_python_pypy(src, version, type_comments, filename)
+
+    return parse_python_cpython(src, version, type_comments, filename)
+
+
+def parse_python_pypy(
+    src: str, version: Tuple[int, int], type_comments: bool, filename: str
+) -> ast.AST:
+    """
+    Parse Python source code in PyPy.
+
+    Args:
+        src: The source code string to parse.
+        version: A tuple of the Python version to parse the source code for.
+        type_comments: A flag indicating whether to include type comments in the parsed AST.
+        filename: The filename of the source code.
+
+    Returns:
+        An AST of the parsed source code in the specified Python version format.
+    """
+    if sys.version_info >= (3, 8):
+        return ast3.parse(src, filename, type_comments=type_comments)
+    else:
+        return ast3.parse(src, filename)
+
+
+def parse_python_cpython(
+    src: str, version: Tuple[int, int], type_comments: bool, filename: str
+) -> ast3.AST:
+    """
+    Parse Python source code in CPython using typed-ast (ast3).
+
+    Args:
+        src: The source code string to parse.
+        version: A tuple of the Python version to parse the source code for.
+        type_comments: A flag indicating whether to include type comments in the parsed AST.
+        filename: The filename of the source code.
+
+    Returns:
+        An AST of the parsed source code in the specified Python version format.
+    """
+    if type_comments:
+        return ast3.parse(src, filename, feature_version=version[1])
+
+    return ast.parse(src, filename)
+
+
 def ensure_parsed_src(src_txt: str) -> str:
     if not src_txt.endswith("\n"):
         src_txt += "\n"
@@ -206,32 +314,6 @@ def lib2to3_unparse(node: Node) -> str:
     """Given a lib2to3 node, return its string representation."""
     code = str(node)
     return code
-
-
-def parse_single_version(
-    src: str, version: Tuple[int, int], *, type_comments: bool
-) -> Union[ast.AST, ast3.AST]:
-    filename = "<unknown>"
-    # typed-ast is needed because of feature version limitations in the builtin ast 3.8>
-    if sys.version_info >= (3, 8) and version >= (3,):
-        return ast.parse(
-            src, filename, feature_version=version, type_comments=type_comments
-        )
-
-    if _IS_PYPY:
-        # PyPy 3.7 doesn't support type comment tracking which is not ideal, but there's
-        # not much we can do as typed-ast won't work either.
-        if sys.version_info >= (3, 8):
-            return ast3.parse(src, filename, type_comments=type_comments)
-        else:
-            return ast3.parse(src, filename)
-    else:
-        if type_comments:
-            # Typed-ast is guaranteed to be used here and automatically tracks type
-            # comments separately.
-            return ast3.parse(src, filename, feature_version=version[1])
-        else:
-            return ast.parse(src, filename)
 
 
 def parse_ast(src: str) -> Union[ast.AST, ast3.AST]:
