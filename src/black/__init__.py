@@ -31,6 +31,7 @@ from black.trans import iter_fexpr_spans
 from blib2to3.pgen2 import token
 from blib2to3.pytree import Leaf, Node
 from typing import Any, Dict, List, Optional, Tuple
+from typing import Callable
 from typing import (
     Any,
     Dict,
@@ -141,6 +142,26 @@ def parse_pyproject_toml(config_path: str) -> Dict[str, Any]:
     return config.get("tool", {}).get("black", {})
 
 
+def target_version_option_callback(
+    c: click.Context, p: Union[click.Option, click.Parameter], v: Tuple[str, ...]
+) -> List[TargetVersion]:
+    return convert_version_strings_to_enums(v)
+
+
+def convert_version_strings_to_enums(
+    version_strings: Tuple[str, ...]
+) -> List[TargetVersion]:
+    """Convert version strings to TargetVersion enum values.
+
+    Args:
+        version_strings (Tuple[str, ...]): A tuple containing version value strings.
+
+    Returns:
+        List[TargetVersion]: A list of the corresponding TargetVersion enum values.
+    """
+    return [TargetVersion[val.upper()] for val in version_strings]
+
+
 def update_click_context(ctx: click.Context, config: Dict[str, Any]) -> None:
     """
     Update the given Click context's default_map with the given Black configuration.
@@ -221,17 +242,6 @@ def read_pyproject_toml(
         update_click_context(ctx, config)
 
     return value
-
-
-def target_version_option_callback(
-    c: click.Context, p: Union[click.Option, click.Parameter], v: Tuple[str, ...]
-) -> List[TargetVersion]:
-    """Compute the target versions from a --target-version flag.
-
-    This is its own function because mypy couldn't infer the type correctly
-    when it was a lambda, causing mypyc trouble.
-    """
-    return [TargetVersion[val.upper()] for val in v]
 
 
 def re_compile_maybe_verbose(regex: str) -> Pattern[str]:
