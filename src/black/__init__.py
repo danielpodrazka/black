@@ -143,6 +143,52 @@ def parse_pyproject_toml(config_path: str) -> Dict[str, Any]:
     return config.get("tool", {}).get("black", {})
 
 
+def validate_regex(
+    ctx: click.Context,
+    param: click.Parameter,
+    value: Optional[str],
+) -> Optional[Pattern[str]]:
+    """
+    Validate the given regular expression and return the compiled pattern if valid.
+
+    This function is a callback for Click options that require a valid regex.
+
+    Args:
+        ctx: The Click context.
+        param: The Click parameter.
+        value: The string representation of the regular expression.
+
+    Returns:
+        A compiled pattern if the regular expression is valid, or None if the value is None.
+
+    Raises:
+        click.BadParameter: If the given value is not a valid regular expression.
+    """
+    if value is None:
+        return None
+
+    try:
+        return compile_regex(value)
+    except re.error as e:
+        raise click.BadParameter(f"Not a valid regular expression: {e}") from None
+
+
+def compile_regex(pattern: str) -> Pattern[str]:
+    """
+    Compile and return the given regular expression.
+
+    Args:
+        pattern: The string representation of the regular expression.
+
+    Returns:
+        A compiled Pattern object.
+
+    Raises:
+        re.error: If the provided pattern is not a valid regular expression.
+    """
+    return re.compile(pattern, re.VERBOSE) if pattern else None
+
+
 def re_compile_maybe_verbose(regex: str) -> Pattern[str]:
     """Compile a regular expression string provided in `regex`.
 
@@ -277,17 +323,6 @@ def read_pyproject_toml(
         update_click_context(ctx, config)
 
     return value
-
-
-def validate_regex(
-    ctx: click.Context,
-    param: click.Parameter,
-    value: Optional[str],
-) -> Optional[Pattern[str]]:
-    try:
-        return re_compile_maybe_verbose(value) if value is not None else None
-    except re.error as e:
-        raise click.BadParameter(f"Not a valid regular expression: {e}") from None
 
 
 @click.command(
