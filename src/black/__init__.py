@@ -33,6 +33,7 @@ from blib2to3.pytree import Leaf, Node
 from typing import Any, Dict, List, Optional, Tuple
 from typing import Callable
 from typing import Pattern
+from typing import Set
 from typing import (
     Any,
     Dict,
@@ -187,6 +188,132 @@ def compile_regex(pattern: str) -> Pattern[str]:
         re.error: If the provided pattern is not a valid regular expression.
     """
     return re.compile(pattern, re.VERBOSE) if pattern else None
+
+
+def handle_exclude_options(
+    using_default_exclude: bool,
+    exclude: Optional[Pattern[str]],
+    extend_exclude: Optional[Pattern[str]],
+) -> Tuple[Optional[Pattern[str]], Tuple[Dict[Path, PathSpec], Dict[Path, PathSpec]]]:
+    gitignore: Optional[Dict[Path, PathSpec]] = None
+    if using_default_exclude:
+        root_gitignore = get_gitignore(root)
+        gitignore = {
+            root: root_gitignore,
+        }
+
+        if extend_exclude:
+            combined_exclude_pattern = (
+                f"(?:{exclude.pattern})|(?:{extend_exclude.pattern})"
+            )
+            exclude = re.compile(combined_exclude_pattern)
+    return exclude, gitignore
+
+
+def _add_source_from_file_path(
+    sources: Set[Path],
+    path: Path,
+    ctx: click.Context,
+    include: Pattern[str],
+    exclude: Optional[Pattern[str]],
+    extend_exclude: Optional[Pattern[str]],
+    force_exclude: Optional[Pattern[str]],
+    report: "Report",
+    verbose: bool,
+    quiet: bool,
+) -> None:
+    normalized_path = normalize_path_maybe_ignore(path, ctx.obj["root"], report)
+    if normalized_path is None:
+        return
+    normalized_path = "/" + normalized_path
+
+    if exclude_and_normalize_match(force_exclude, normalized_path):
+        report.path_ignored(path, "matches the --force-exclude regular expression")
+        return
+
+    if path.suffix == ".ipynb" and not jupyter_dependencies_are_installed(
+        verbose=verbose, quiet=quiet
+    ):
+        return
+
+    sources.add(path)
+
+
+def get_sources(
+    *,
+    ctx: click.Context,
+    src: Tuple[str, ...],
+    quiet: bool,
+    verbose: bool,
+    include: Pattern[str],
+    exclude: Optional[Pattern[str]],
+    extend_exclude: Optional[Pattern[str]],
+    force_exclude: Optional[Pattern[str]],
+    report: "Report",
+    stdin_filename: Optional[str],
+) -> Set[Path]:
+    sources: Set[Path] = set()
+    root = ctx.obj["root"]
+
+    using_default_exclude = exclude is None
+    exclude, gitignore = handle_exclude_options(
+        using_default_exclude, exclude, extend_exclude
+    )
+
+    for s in src:
+        if s == "-" and stdin_filename:
+            path = Path(stdin_filename)
+            is_stdin = True
+        else:
+            path = Path(s)
+            is_stdin = False
+
+        if is_stdin or path.is_file():
+            _add_source_from_file_path(
+                sources,
+                path,
+                ctx,
+                include,
+                exclude,
+                extend_exclude,
+                force_exclude,
+                report,
+                verbose,
+                quiet,
+            )
+        elif path.is_dir():
+            path = root / normalize_path_maybe_ignore(path, ctx.obj["root"], report)
+            if using_default_exclude:
+                gitignore[path] = get_gitignore(path)
+            sources.update(
+                gen_python_files(
+                    path.iterdir(),
+                    ctx.obj["root"],
+                    include,
+                    exclude,
+                    extend_exclude,
+                    force_exclude,
+                    report,
+                    gitignore,
+                    verbose=verbose,
+                    quiet=quiet,
+                )
+            )
+        elif s == "-":
+            sources.add(path)
+        else:
+            err(f"invalid path: {s}")
+    return sources
+
+
+def exclude_and_normalize_match(
+    force_exclude: Optional[Pattern[str]], normalized_path: str
+) -> bool:
+    if force_exclude:
+        force_exclude_match = force_exclude.search(normalized_path)
+        if force_exclude_match and force_exclude_match.group(0):
+            return True
+    return False
 
 
 def re_compile_maybe_verbose(regex: str) -> Pattern[str]:
@@ -745,88 +872,6 @@ def main(  # noqa: C901
         if code is None:
             click.echo(str(report), err=True)
     ctx.exit(report.return_code)
-
-
-def get_sources(
-    *,
-    ctx: click.Context,
-    src: Tuple[str, ...],
-    quiet: bool,
-    verbose: bool,
-    include: Pattern[str],
-    exclude: Optional[Pattern[str]],
-    extend_exclude: Optional[Pattern[str]],
-    force_exclude: Optional[Pattern[str]],
-    report: "Report",
-    stdin_filename: Optional[str],
-) -> Set[Path]:
-    """Compute the set of files to be formatted."""
-    sources: Set[Path] = set()
-    root = ctx.obj["root"]
-
-    using_default_exclude = exclude is None
-    exclude = re_compile_maybe_verbose(DEFAULT_EXCLUDES) if exclude is None else exclude
-    gitignore: Optional[Dict[Path, PathSpec]] = None
-    root_gitignore = get_gitignore(root)
-
-    for s in src:
-        if s == "-" and stdin_filename:
-            p = Path(stdin_filename)
-            is_stdin = True
-        else:
-            p = Path(s)
-            is_stdin = False
-
-        if is_stdin or p.is_file():
-            normalized_path = normalize_path_maybe_ignore(p, ctx.obj["root"], report)
-            if normalized_path is None:
-                continue
-
-            normalized_path = "/" + normalized_path
-            # Hard-exclude any files that matches the `--force-exclude` regex.
-            if force_exclude:
-                force_exclude_match = force_exclude.search(normalized_path)
-            else:
-                force_exclude_match = None
-            if force_exclude_match and force_exclude_match.group(0):
-                report.path_ignored(p, "matches the --force-exclude regular expression")
-                continue
-
-            if is_stdin:
-                p = Path(f"{STDIN_PLACEHOLDER}{str(p)}")
-
-            if p.suffix == ".ipynb" and not jupyter_dependencies_are_installed(
-                verbose=verbose, quiet=quiet
-            ):
-                continue
-
-            sources.add(p)
-        elif p.is_dir():
-            p = root / normalize_path_maybe_ignore(p, ctx.obj["root"], report)
-            if using_default_exclude:
-                gitignore = {
-                    root: root_gitignore,
-                    p: get_gitignore(p),
-                }
-            sources.update(
-                gen_python_files(
-                    p.iterdir(),
-                    ctx.obj["root"],
-                    include,
-                    exclude,
-                    extend_exclude,
-                    force_exclude,
-                    report,
-                    gitignore,
-                    verbose=verbose,
-                    quiet=quiet,
-                )
-            )
-        elif s == "-":
-            sources.add(p)
-        else:
-            err(f"invalid path: {s}")
-    return sources
 
 
 def path_empty(
