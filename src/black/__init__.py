@@ -11,6 +11,26 @@ from datetime import datetime
 from enum import Enum
 from json.decoder import JSONDecodeError
 from pathlib import Path
+
+import click
+from click.core import ParameterSource
+from mypy_extensions import mypyc_attr
+from pathspec import PathSpec
+from pathspec.patterns.gitwildmatch import GitWildMatchPatternError
+
+from _black_version import version as __version__
+from black.cache import Cache, get_cache_info, read_cache, write_cache
+from black.comments import normalize_fmt_off
+from black.linegen import LN, LineGenerator, transform_line
+from black.lines import EmptyLineTracker, LinesBlock
+from black.output import color_diff, diff, dump_to_file, err, ipynb_diff, out
+from black.parsing import InvalidInput  # noqa F401
+from black.parsing import lib2to3_parse, parse_ast, stringify_ast
+from black.report import Changed, NothingChanged, Report
+from black.trans import iter_fexpr_spans
+from blib2to3.pgen2 import token
+from blib2to3.pytree import Leaf, Node
+from typing import Any, Dict, List, Optional, Tuple
 from typing import (
     Any,
     Dict,
@@ -26,16 +46,6 @@ from typing import (
     Tuple,
     Union,
 )
-
-import click
-from click.core import ParameterSource
-from mypy_extensions import mypyc_attr
-from pathspec import PathSpec
-from pathspec.patterns.gitwildmatch import GitWildMatchPatternError
-
-from _black_version import version as __version__
-from black.cache import Cache, get_cache_info, read_cache, write_cache
-from black.comments import normalize_fmt_off
 from black.const import (
     DEFAULT_EXCLUDES,
     DEFAULT_INCLUDES,
@@ -61,8 +71,6 @@ from black.handle_ipynb_magics import (
     remove_trailing_semicolon,
     unmask_cell,
 )
-from black.linegen import LN, LineGenerator, transform_line
-from black.lines import EmptyLineTracker, LinesBlock
 from black.mode import (
     FUTURE_FLAG_TO_FEATURE,
     VERSION_TO_FEATURES,
@@ -78,13 +86,6 @@ from black.nodes import (
     is_string_token,
     syms,
 )
-from black.output import color_diff, diff, dump_to_file, err, ipynb_diff, out
-from black.parsing import InvalidInput  # noqa F401
-from black.parsing import lib2to3_parse, parse_ast, stringify_ast
-from black.report import Changed, NothingChanged, Report
-from black.trans import iter_fexpr_spans
-from blib2to3.pgen2 import token
-from blib2to3.pytree import Leaf, Node
 
 COMPILED = Path(__file__).suffix in (".pyd", ".so")
 
@@ -94,37 +95,112 @@ Encoding = str
 NewLine = str
 
 
-class WriteBack(Enum):
-    NO = 0
-    YES = 1
-    DIFF = 2
-    CHECK = 3
-    COLOR_DIFF = 4
-
-    @classmethod
-    def from_configuration(
-        cls, *, check: bool, diff: bool, color: bool = False
-    ) -> "WriteBack":
-        if check and not diff:
-            return cls.CHECK
-
-        if diff and color:
-            return cls.COLOR_DIFF
-
-        return cls.DIFF if diff else cls.YES
-
-
 # Legacy name, left for integrations.
 FileMode = Mode
+
+
+def find_pyproject_toml(paths: Tuple[str, ...]) -> Optional[str]:
+    """
+    Find and return the path to the first "pyproject.toml" file found.
+
+    Args:
+        paths (Tuple[str, ...]): A tuple of paths to search for "pyproject.toml".
+
+    Returns:
+        Optional[str]: The path to the first "pyproject.toml" file found, None otherwise.
+    """
+    for path in paths:
+        if Path(path).is_file():
+            path = str(Path(path).resolve().parent)
+        candidate = Path(path) / "pyproject.toml"
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def parse_pyproject_toml(config_path: str) -> Dict[str, Any]:
+    """
+    Parse and return the Black configuration from a "pyproject.toml" file.
+
+    Args:
+        config_path (str): The path to the "pyproject.toml" file to parse.
+
+    Returns:
+        Dict[str, Any]: A dictionary containing the Black configuration. Empty if no
+                       configuration is found.
+
+    Raises:
+        ValueError: If the toml file is malformed.
+    """
+    import toml
+
+    with open(config_path, "r", encoding="utf8") as f:
+        pyproject_toml = f.read()
+
+    config = toml.loads(pyproject_toml)
+    return config.get("tool", {}).get("black", {})
+
+
+def update_click_context(ctx: click.Context, config: Dict[str, Any]) -> None:
+    """
+    Update the given Click context's default_map with the given Black configuration.
+
+    Args:
+        ctx (click.Context): The Click context to update.
+        config (Dict[str, Any]): The Black configuration to inject into the context.
+    """
+    config = {
+        k: str(v) if not isinstance(v, (list, dict)) else v for k, v in config.items()
+    }
+
+    default_map: Dict[str, Any] = {}
+    if ctx.default_map:
+        default_map.update(ctx.default_map)
+    default_map.update(config)
+
+    ctx.default_map = default_map
+
+
+def validate_target_version(config: Dict[str, Any]) -> None:
+    """
+    Validate the target version inside the given Black configuration.
+
+    Args:
+        config (Dict[str, Any]): The Black configuration to check for valid target version.
+
+    Raises:
+        click.BadOptionUsage: If the "target_version" key is not a list.
+    """
+    target_version = config.get("target_version")
+    if target_version is not None and not isinstance(target_version, list):
+        raise click.BadOptionUsage(
+            "target-version", "Config key target-version must be a list"
+        )
 
 
 def read_pyproject_toml(
     ctx: click.Context, param: click.Parameter, value: Optional[str]
 ) -> Optional[str]:
-    """Inject Black configuration from "pyproject.toml" into defaults in `ctx`.
+    """
+    Inject Black configuration from "pyproject.toml" into defaults in `ctx`.
 
-    Returns the path to a successfully found and read configuration file, None
-    otherwise.
+    This function is a callback for the Click option in the main function.
+    It tries to find the "pyproject.toml" file, read it, parse it, and update
+    the config of the Click context with the values from the file.
+
+    Args:
+        ctx (click.Context): The Click context.
+        param (click.Parameter): The Click parameter that triggered the callback.
+        value (Optional[str]): The user-provided value for the "config" option.
+                              If None, it will try to find the "pyproject.toml" file.
+
+    Returns:
+        Optional[str]: The path to a successfully found and read configuration file,
+                       None otherwise.
+
+    Raises:
+        click.FileError: If the configuration file can't be read or has errors.
+        click.BadOptionUsage: If the "target_version" config key is not a list.
     """
     if not value:
         value = find_pyproject_toml(ctx.params.get("src", ()))
@@ -141,26 +217,9 @@ def read_pyproject_toml(
     if not config:
         return None
     else:
-        # Sanitize the values to be Click friendly. For more information please see:
-        # https://github.com/psf/black/issues/1458
-        # https://github.com/pallets/click/issues/1567
-        config = {
-            k: str(v) if not isinstance(v, (list, dict)) else v
-            for k, v in config.items()
-        }
+        validate_target_version(config)
+        update_click_context(ctx, config)
 
-    target_version = config.get("target_version")
-    if target_version is not None and not isinstance(target_version, list):
-        raise click.BadOptionUsage(
-            "target-version", "Config key target-version must be a list"
-        )
-
-    default_map: Dict[str, Any] = {}
-    if ctx.default_map:
-        default_map.update(ctx.default_map)
-    default_map.update(config)
-
-    ctx.default_map = default_map
     return value
 
 
