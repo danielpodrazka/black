@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from typing import Callable
 from typing import Pattern
 from typing import Set
+from typing import Sized
 from typing import (
     Any,
     Dict,
@@ -188,6 +189,41 @@ def compile_regex(pattern: str) -> Pattern[str]:
         re.error: If the provided pattern is not a valid regular expression.
     """
     return re.compile(pattern, re.VERBOSE) if pattern else None
+
+
+def display_message(msg: str, quiet: bool, verbose: bool) -> None:
+    """
+    Display message based on quiet and verbose flags.
+
+    Args:
+        msg: The message to be printed.
+        quiet: A boolean flag to suppress the message if set to True.
+        verbose: A boolean flag to force the message to be printed if set to True.
+    """
+    if verbose or not quiet:
+        out(msg)
+
+
+def path_empty(
+    src: Sized, msg: str, quiet: bool, verbose: bool, ctx: click.Context
+) -> None:
+    """
+    Exit if the provided `src` for formatting is empty.
+
+    This function checks if the provided `src` is empty or not. If it is empty, it prints
+    the given `msg` and exits the program. The output is controlled by the `quiet` and
+    `verbose` flags.
+
+    Args:
+        src: The source to be checked for emptiness.
+        msg: The message to be printed if the source is empty.
+        quiet: A boolean flag to suppress the message if set to True.
+        verbose: A boolean flag to force the message to be printed if set to True.
+        ctx: The Click context, used to exit the program.
+    """
+    if not src:
+        display_message(msg, quiet, verbose)
+        ctx.exit(0)
 
 
 def handle_exclude_options(
@@ -872,18 +908,6 @@ def main(  # noqa: C901
         if code is None:
             click.echo(str(report), err=True)
     ctx.exit(report.return_code)
-
-
-def path_empty(
-    src: Sized, msg: str, quiet: bool, verbose: bool, ctx: click.Context
-) -> None:
-    """
-    Exit if there is no `src` provided for formatting
-    """
-    if not src:
-        if verbose or not quiet:
-            out(msg)
-        ctx.exit(0)
 
 
 def reformat_code(
