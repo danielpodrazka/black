@@ -32,6 +32,7 @@ from blib2to3.pgen2 import token
 from blib2to3.pytree import Leaf, Node
 from typing import Any, Dict, List, Optional, Tuple
 from typing import Callable
+from typing import Pattern
 from typing import (
     Any,
     Dict,
@@ -142,6 +143,40 @@ def parse_pyproject_toml(config_path: str) -> Dict[str, Any]:
     return config.get("tool", {}).get("black", {})
 
 
+def re_compile_maybe_verbose(regex: str) -> Pattern[str]:
+    """Compile a regular expression string provided in `regex`.
+
+    If the regular expression contains newlines, the function uses verbose mode
+    for better readability and easier modification of the regex. This is
+    particularly useful for complex regular expressions that require
+    documentation alongside their components.
+
+    Args:
+        regex (str): The regular expression string to compile.
+
+    Returns:
+        Pattern[str]: The compiled regular expression pattern.
+
+    """
+    regex = add_verbose_mode_if_newline(regex)
+    compiled: Pattern[str] = re.compile(regex)
+    return compiled
+
+
+def add_verbose_mode_if_newline(regex: str) -> str:
+    """Add verbose mode flag to the regex string if it contains newlines.
+
+    Args:
+        regex (str): The regular expression string.
+
+    Returns:
+        str: The regular expression string with verbose mode flag if it contains newlines.
+    """
+    if "\n" in regex:
+        regex = "(?x)" + regex
+    return regex
+
+
 def target_version_option_callback(
     c: click.Context, p: Union[click.Option, click.Parameter], v: Tuple[str, ...]
 ) -> List[TargetVersion]:
@@ -242,17 +277,6 @@ def read_pyproject_toml(
         update_click_context(ctx, config)
 
     return value
-
-
-def re_compile_maybe_verbose(regex: str) -> Pattern[str]:
-    """Compile a regular expression string in `regex`.
-
-    If it contains newlines, use verbose mode.
-    """
-    if "\n" in regex:
-        regex = "(?x)" + regex
-    compiled: Pattern[str] = re.compile(regex)
-    return compiled
 
 
 def validate_regex(
